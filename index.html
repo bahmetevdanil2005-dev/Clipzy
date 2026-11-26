@@ -133,18 +133,24 @@ input[type=range]{accent-color:var(--pri);width:100%}
   <div class="sample" id="sample">Острая фраза <span id="sampleHi">с акцентом</span></div>
   <label class="field" style="margin-top:14px"><span>Размер: <b id="szv"></b></span><input type="range" id="size" min="34" max="96" step="1"></label>
   <div class="two">
-    <label class="field">Положение<select id="pos"><option value="top">Сверху</option><option value="center">По центру</option><option value="bottom">Снизу</option></select></label>
+    <label class="field">Положение<select id="layout"><option value="auto">По всему кадру (авто)</option><option value="top">Всегда сверху</option><option value="center">Всегда по центру</option><option value="bottom">Всегда снизу</option></select></label>
     <label class="field">Оформление<select id="look"><option value="outline">Обводка</option><option value="plain">Без обводки</option></select></label>
   </div>
   <div class="two">
     <label class="field">Регистр<select id="upper"><option value="1">ЗАГЛАВНЫЕ</option><option value="0">Как написано</option></select></label>
     <label class="field">Подсветка слов<select id="karaoke"><option value="1">По мере озвучки</option><option value="0">Выключена</option></select></label>
   </div>
+  <div class="two">
+    <label class="field">Слов за раз<select id="chunk"><option value="1">По одному</option><option value="2">Одно-два</option></select></label>
+  </div>
 
   <h4>Подача сценария</h4>
   <div class="two">
     <label class="field">Тон<select id="tone"><option>Дерзкий</option><option>Нейтральный</option><option>Драматичный</option><option>Образовательный</option><option>Юмористический</option></select></label>
     <label class="field">Длина<select id="secs"><option value="30">≈ 30 секунд</option><option value="45">≈ 45 секунд</option><option value="60">≈ 60 секунд</option></select></label>
+  </div>
+  <div class="two">
+    <label class="field">Смена фона (только между фразами)<select id="bgmode"><option value="0">Один фон на всё видео</option><option value="1">Каждая реплика</option><option value="2">Каждые 2 реплики</option><option value="3">Каждые 3 реплики</option></select></label>
   </div>
 </div></section>
 
@@ -167,7 +173,7 @@ document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{
 /* Настройки (хранятся в браузере) */
 const FONTS=['Montserrat','Inter','Oswald','Rubik','Playfair Display','Unbounded','Russo One'];
 const VOICES=['Kore','Puck','Charon','Fenrir','Aoede','Zephyr','Orus','Leda','Algenib','Sulafat'];
-const DEF={acc:'#00f0ff',acc2:'#ffffff',font:'Montserrat',size:58,pos:'center',look:'outline',upper:'1',karaoke:'1',tone:'Дерзкий',secs:'45',voice:'Kore'};
+const DEF={acc:'#00f0ff',acc2:'#ffffff',font:'Montserrat',size:58,layout:'auto',chunk:'2',bgmode:'3',look:'outline',upper:'1',karaoke:'1',tone:'Дерзкий',secs:'45',voice:'Kore'};
 let CFG={...DEF};
 try{Object.assign(CFG,JSON.parse(localStorage.getItem('clipzy')||'{}'))}catch(e){}
 const save=()=>{try{localStorage.setItem('clipzy',JSON.stringify(CFG))}catch(e){}};
@@ -245,7 +251,7 @@ const BACKGROUNDS=[
 /* Состояние видео */
 const VWd=540,VHt=960;
 const S={segs:[],bg:0,speed:1,gap:.15,title:'',hasTTS:false};
-let vidInst=BACKGROUNDS[0].create(VWd,VHt),total=0,pos=0,playing=false,t0=0,srcs=[],AC=null,exporting=false;
+let vidInst=null,curBg=-1,total=0,pos=0,playing=false,t0=0,srcs=[],AC=null,exporting=false;
 const getAC=()=>{AC=AC||new(window.AudioContext||window.webkitAudioContext)();if(AC.state==='suspended')AC.resume();return AC};
 const fmt=s=>{s=Math.max(0,s);return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')};
 const wc=t=>t.trim().split(/\s+/).filter(Boolean).length;
@@ -258,6 +264,7 @@ function compute(){
     const r=sg.rate*S.speed;
     sg.dur=sg.buf?sg.buf.duration/r:Math.max(1,wc(sg.text)*.4)/r;
     sg.start=t;t+=sg.dur+S.gap});
+  let g0=0;S.segs.forEach(sg=>{sg.chunks=chunksOf(sg);sg.g0=g0;g0+=sg.chunks.length});
   total=Math.max(0,t-S.gap);
   $('seek').max=total||1;
   S.segs.forEach((sg,i)=>{const r=document.querySelector(`[data-i="${i}"]`);if(!r)return;
@@ -297,32 +304,59 @@ function seekTo(t){pause();pos=Math.max(0,Math.min(total,t));play()}
 $('pp').onclick=()=>playing?pause():play();
 $('seek').oninput=e=>{const was=playing;pause();pos=+e.target.value;if(was)play()};
 
-/* Субтитры на холсте */
-function drawSubs(g,w,h,sg,p){
-  const size=CFG.size,words=(CFG.upper==='1'?sg.text.toUpperCase():sg.text).trim().split(/\s+/).filter(Boolean);if(!words.length)return;
-  g.save();g.font=`800 ${size}px "${CFG.font}",sans-serif`;g.textBaseline='middle';g.textAlign='left';g.lineJoin='round';g.shadowBlur=0;
-  const sp=g.measureText(' ').width,maxW=w*.86,lines=[];let cur=[],cw=0;
-  for(const wd of words){const ww=g.measureText(wd).width;if(cur.length&&cw+sp+ww>maxW){lines.push(cur);cur=[];cw=0}cur.push({wd,ww});cw+=(cur.length>1?sp:0)+ww}
-  lines.push(cur);
-  const tot=words.reduce((a,x)=>a+x.length+1,0);let acc=0,act=words.length-1;
-  for(let i=0;i<words.length;i++){acc+=words[i].length+1;if(p*tot<acc){act=i;break}}
-  const lh=size*1.22,H0=lines.length*lh,cy=CFG.pos==='top'?h*.2:CFG.pos==='bottom'?h*.74:h*.5;let k=0,y=cy-H0/2+lh/2;
-  for(const ln of lines){const lw=ln.reduce((a,x)=>a+x.ww,0)+sp*(ln.length-1);let x=w/2-lw/2;
-    for(const o of ln){const hi=CFG.karaoke==='1'&&k===act;
-      if(CFG.look==='outline'){g.lineWidth=size*.16;g.strokeStyle='#000';g.strokeText(o.wd,x,y)}
-      g.fillStyle=hi?PRI:CFG.acc2;g.fillText(o.wd,x,y);x+=o.ww+sp;k++}
-    y+=lh}
+/* Субтитры: по 1–2 слова, разные места кадра, всегда внутри экрана */
+const SLOTS=[{x:.5,y:.15,a:'c'},{x:0,y:.29,a:'l'},{x:1,y:.42,a:'r'},{x:.5,y:.52,a:'c'},{x:0,y:.64,a:'l'},{x:1,y:.76,a:'r'},{x:.5,y:.87,a:'c'}];
+const ORDER=[3,0,5,1,6,2,4];
+const chunkCache=new Map();
+function chunksOf(sg){
+  const key=sg.text+'|'+CFG.upper+'|'+CFG.chunk;let c=chunkCache.get(key);if(c)return c;
+  const words=(CFG.upper==='1'?sg.text.toUpperCase():sg.text).trim().split(/\s+/).filter(Boolean),max=CFG.chunk==='1'?1:2;c=[];
+  for(let i=0;i<words.length;){
+    let n=1;if(max===2&&i+1<words.length&&!/[.!?,;:—…]$/.test(words[i])&&words[i].length+words[i+1].length<=13)n=2;
+    c.push({words:words.slice(i,i+n)});i+=n}
+  let tot=0;c.forEach(x=>{x.wt=x.words.reduce((a,w)=>a+w.length+1,0)+2;tot+=x.wt});
+  let acc=0;c.forEach(x=>{x.t0=acc/tot;acc+=x.wt;x.t1=acc/tot});
+  if(chunkCache.size>300)chunkCache.clear();chunkCache.set(key,c);return c}
+function drawChunk(g,w,h,ch,gi,age,p){
+  const slot=CFG.layout==='auto'?SLOTS[ORDER[gi%ORDER.length]]:SLOTS[{top:0,center:3,bottom:6}[CFG.layout]];
+  const M=w*.07,maxW=w-2*M;
+  g.save();g.textBaseline='middle';g.textAlign='left';g.lineJoin='round';g.shadowBlur=0;
+  let size=CFG.size;const setF=s=>g.font=`800 ${s}px "${CFG.font}",sans-serif`;setF(size);
+  let lines=[ch.words];
+  const wid=ls=>Math.max(...ls.map(l=>g.measureText(l.join(' ')).width));
+  if(wid(lines)>maxW&&ch.words.length>1)lines=ch.words.map(x=>[x]);   // не влезло в строку — слова друг под другом
+  let bw=wid(lines);if(bw>maxW){size=Math.max(24,Math.floor(size*maxW/bw));setF(size);bw=wid(lines)}  // всё ещё не влезло — уменьшаем шрифт
+  const lh=size*1.2,bh=lines.length*lh,pad=M+size*.1;
+  const xc=slot.a==='c'?w/2:slot.a==='l'?M+bw/2:w-M-bw/2;
+  const yc=Math.min(h-pad-bh/2,Math.max(pad+bh/2,slot.y*h));         // зажимаем по вертикали
+  const e=Math.min(1,age/.14),sc=.8+.2*(1-Math.pow(1-e,3));
+  g.globalAlpha=Math.min(1,age/.07+.2);g.translate(xc,yc);g.scale(sc,sc);
+  const pc=(p-ch.t0)/Math.max(1e-6,ch.t1-ch.t0),tot=ch.words.reduce((a,x)=>a+x.length+1,0);
+  let acc=0,act=ch.words.length-1;for(let i=0;i<ch.words.length;i++){acc+=ch.words[i].length+1;if(pc*tot<acc){act=i;break}}
+  let k=0;const spw=g.measureText(' ').width;
+  lines.forEach((ln,li)=>{
+    const lw=g.measureText(ln.join(' ')).width,y=-bh/2+lh*(li+.5);
+    let x=slot.a==='l'?-bw/2:slot.a==='r'?bw/2-lw:-lw/2;
+    ln.forEach(wd=>{const hi=CFG.karaoke==='1'&&k===act;
+      if(CFG.look==='outline'){g.lineWidth=size*.16;g.strokeStyle='#000';g.strokeText(wd,x,y)}
+      g.fillStyle=hi?PRI:CFG.acc2;g.fillText(wd,x,y);x+=g.measureText(wd).width+spw;k++})});
   g.restore()}
 
 const vc=$('vc'),vg=vc.getContext('2d',{alpha:false});
+function curSeg(){let si=-1;S.segs.forEach((s,i)=>{if(pos>=s.start&&pos<s.start+s.dur+S.gap+.001)si=i});return si<0?(S.segs.length&&pos>=total?S.segs.length-1:0):si}
+// Фон меняется только на границе реплик: номер фона зависит от номера реплики
+function planBg(si){const k=+CFG.bgmode;return k?(S.bg+Math.floor(si/k))%BACKGROUNDS.length:S.bg}
 function drawVideo(T){
+  const si=curSeg(),sg=S.segs[si],b=planBg(Math.max(0,si));
+  if(!vidInst||b!==curBg){curBg=b;vidInst=BACKGROUNDS[b].create(VWd,VHt)}
   vg.setTransform(1,0,0,1,0,0);vg.globalAlpha=1;vg.shadowBlur=0;vidInst.draw(vg,T,VWd,VHt);vg.shadowBlur=0;vg.globalAlpha=1;
-  let sg=null;for(const s of S.segs)if(pos>=s.start&&pos<s.start+s.dur+S.gap+.001)sg=s;
-  if(sg)drawSubs(vg,VWd,VHt,sg,Math.min(1,Math.max(0,(pos-sg.start)/sg.dur)));
+  if(sg&&sg.chunks&&sg.chunks.length&&pos>=sg.start-.001){
+    const p=Math.min(.9999,Math.max(0,(pos-sg.start)/sg.dur)),ci=Math.max(0,sg.chunks.findIndex(c=>p<c.t1)),ch=sg.chunks[ci];
+    drawChunk(vg,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p)}
   $('tm').textContent=fmt(pos)+' / '+fmt(total)}
 
 /* Выбор фона */
-function selectBg(i){S.bg=i;vidInst=BACKGROUNDS[i].create(VWd,VHt);
+function selectBg(i){S.bg=i;curBg=-1;
   document.querySelectorAll('.chip').forEach((c,k)=>c.classList.toggle('on',k===i));
   document.querySelectorAll('.card').forEach((c,k)=>c.classList.toggle('sel',k===i))}
 BACKGROUNDS.forEach((b,i)=>{const c=document.createElement('div');c.className='chip';c.textContent=b.name;c.onclick=()=>selectBg(i);$('chips').appendChild(c)});
@@ -419,7 +453,7 @@ VOICES.forEach(v=>{const o=document.createElement('option');o.textContent=v;$('v
 const bind=(id,key,fn)=>{const el=$(id);el.value=CFG[key];el.addEventListener('input',()=>{CFG[key]=key==='size'?+el.value:el.value;save();fn&&fn()})};
 const fontLoad=()=>{document.fonts.load(`800 40px "${CFG.font}"`,'Аа');const s=$('sample').style;s.fontFamily=`"${CFG.font}",sans-serif`;s.fontWeight=800;s.color=CFG.acc2;
   s.fontSize=Math.round(CFG.size*.55)+'px';$('szv').textContent=CFG.size+' px'};
-bind('font','font',fontLoad);bind('size','size',fontLoad);bind('pos','pos');bind('look','look');bind('upper','upper');bind('karaoke','karaoke');
+bind('font','font',fontLoad);bind('size','size',fontLoad);bind('layout','layout');bind('look','look');bind('upper','upper',compute);bind('chunk','chunk',compute);bind('bgmode','bgmode');bind('karaoke','karaoke');
 bind('tone','tone');bind('secs','secs');bind('voice','voice');
 $('acc').oninput=e=>setAcc(e.target.value);
 $('acc2').value=CFG.acc2;$('acc2').oninput=e=>{CFG.acc2=e.target.value;save();fontLoad()};
