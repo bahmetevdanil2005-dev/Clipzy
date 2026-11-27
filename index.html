@@ -72,6 +72,14 @@ input[type=range]{accent-color:var(--pri);width:100%}
 .grid[hidden]{display:none}
 .agrid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
 .card.acard{aspect-ratio:16/10}
+.seg .mid{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+.brands{display:flex;gap:6px;flex-wrap:wrap}.brands:empty{display:none}
+.bchip{font-size:11px;padding:4px 4px 4px 9px;border-radius:14px;background:rgba(255,255,255,.08);color:var(--txt);display:inline-flex;gap:6px;align-items:center}
+.bchip button{border:0;background:rgba(255,255,255,.12);color:var(--txt);border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer}
+.mrow{display:flex;gap:10px;align-items:center;padding:10px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);margin-bottom:8px}
+.mrow .th img,.mrow .th video{width:56px;height:56px;object-fit:cover;border-radius:10px;display:block}
+.mrow .mi{flex:1;min-width:0}.mrow .mi b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mrow .mi small{color:var(--mut);font-size:11px}.mrow select{padding:7px;font-size:12px;margin-top:6px}
 @media (prefers-reduced-motion:reduce){#island{animation:none}}
 </style>
 </head>
@@ -96,6 +104,14 @@ input[type=range]{accent-color:var(--pri);width:100%}
     <h4>Субтитры</h4>
     <div id="segs"></div>
     <button class="btn ghost" id="addSeg">+ Реплика</button>
+
+    <h4>Логотипы и свои медиа</h4>
+    <p class="note" style="margin:0 0 10px">Логотипы компаний из сценария находятся автоматически (отметки под репликами). Своё фото или видео добавь с описанием: нейросеть выберет реплику и оформление.</p>
+    <input type="file" id="mfile" accept="image/*,video/*" style="color:var(--mut);margin-bottom:8px;width:100%">
+    <textarea id="mdesc" rows="2" placeholder="Что на фото или видео и когда показать? Например: скриншот моего канала, когда говорю про рост подписчиков"></textarea>
+    <button class="btn ghost full" id="madd">Добавить медиа</button>
+    <p class="note" id="mstat"></p>
+    <div id="mlist" style="margin-top:10px"></div>
 
     <h4>Озвучка (Gemini TTS)</h4>
     <div class="two">
@@ -152,6 +168,11 @@ input[type=range]{accent-color:var(--pri);width:100%}
     <label class="field">Слов за раз<select id="chunk"><option value="1">По одному</option><option value="2">Одно-два</option></select></label>
     <label class="field">Анимация появления<select id="anim"></select></label>
   </div>
+  <div class="two">
+    <label class="field">Выделение слова<select id="hiAuto"><option value="1">Авто (контрастный к фону)</option><option value="0">Свой цвет</option></select></label>
+    <label class="field">Свой цвет выделения<input type="color" id="hi" style="width:100%;height:44px;border:0;background:none"></label>
+  </div>
+  <label class="field"><span>Затемнение фона под текстом: <b id="dimv"></b></span><input type="range" id="dim" min="0" max="70" step="5"></label>
 
   <h4>Подача сценария</h4>
   <div class="two">
@@ -182,7 +203,7 @@ document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{
 /* Настройки (хранятся в браузере) */
 const FONTS=['Montserrat','Inter','Oswald','Rubik','Playfair Display','Unbounded','Russo One'];
 const VOICES=['Kore','Puck','Charon','Fenrir','Aoede','Zephyr','Orus','Leda','Algenib','Sulafat'];
-const DEF={acc:'#00f0ff',acc2:'#ffffff',font:'Montserrat',size:58,layout:'auto',anim:'rand',chunk:'2',bgmode:'3',look:'outline',upper:'1',karaoke:'1',tone:'Дерзкий',secs:'45',voice:'Kore'};
+const DEF={acc:'#00f0ff',acc2:'#ffffff',font:'Montserrat',size:58,layout:'auto',anim:'rand',hiAuto:'1',hi:'#ffe14d',dim:'25',chunk:'2',bgmode:'3',look:'outline',upper:'1',karaoke:'1',tone:'Дерзкий',secs:'45',voice:'Kore'};
 let CFG={...DEF};
 try{Object.assign(CFG,JSON.parse(localStorage.getItem('clipzy')||'{}'))}catch(e){}
 const save=()=>{try{localStorage.setItem('clipzy',JSON.stringify(CFG))}catch(e){}};
@@ -192,7 +213,15 @@ let PRI=CFG.acc,ACC=[0,240,255];
 const hex2rgb=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
 const rgb2hex=c=>'#'+c.map(v=>Math.round(v).toString(16).padStart(2,'0')).join('');
 const A=a=>`rgba(${ACC[0]},${ACC[1]},${ACC[2]},${a})`;
-function setAcc(h){CFG.acc=h;PRI=h;ACC=hex2rgb(h);document.documentElement.style.setProperty('--pri',h);$('acc').value=h;$('sampleHi').style.color=h;save();
+/* Цвет выделенного слова: авто = противоположный акценту фона по тону, чтобы текст не сливался с фоном */
+function HI(){
+  if(CFG.hiAuto!=='1')return CFG.hi;
+  const [r,g,b]=ACC.map(v=>v/255),mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;if(d<.08)return '#ffe14d';
+  let h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h=((h*60+360)%360+180)%360;
+  const l=.58,c=(1-Math.abs(2*l-1)),x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2,k=Math.floor(h/60);
+  const v=[[c,x,0],[x,c,0],[0,c,x],[0,x,c],[x,0,c],[c,0,x]][k%6];return rgb2hex(v.map(t=>(t+m)*255))}
+function refreshHi(){const e=$('sampleHi');if(e)e.style.color=HI()}
+function setAcc(h){CFG.acc=h;PRI=h;ACC=hex2rgb(h);document.documentElement.style.setProperty('--pri',h);$('acc').value=h;refreshHi();save();
   document.querySelectorAll('#sw div').forEach(d=>d.classList.toggle('on',d.dataset.c===h))}
 
 /* Perlin noise */
@@ -259,7 +288,7 @@ const BACKGROUNDS=[
 
 /* Состояние видео */
 const VWd=540,VHt=960;
-const S={segs:[],bg:0,speed:1,gap:.15,title:'',hasTTS:false};
+const S={segs:[],bg:0,speed:1,gap:.15,title:'',hasTTS:false,logos:{},media:[],place:[]};
 let vidInst=null,curBg=-1,total=0,pos=0,playing=false,t0=0,srcs=[],AC=null,exporting=false;
 const getAC=()=>{AC=AC||new(window.AudioContext||window.webkitAudioContext)();if(AC.state==='suspended')AC.resume();return AC};
 const fmt=s=>{s=Math.max(0,s);return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')};
@@ -274,6 +303,12 @@ function compute(){
     sg.dur=sg.buf?sg.buf.duration/r:Math.max(1,wc(sg.text)*.4)/r;
     sg.start=t;t+=sg.dur+S.gap});
   let g0=0;S.segs.forEach(sg=>{sg.chunks=chunksOf(sg);sg.g0=g0;g0+=sg.chunks.length});
+  S.segs.forEach(sg=>{sg.vis=null});let zi=0;
+  S.place.forEach(pl=>{const si=S.segs.indexOf(pl.sg);if(si<0)return;const ei=Math.min(S.segs.length-1,si+pl.span-1);
+    const v={kind:'media',m:pl.m,mode:pl.mode,enter:pl.enter,si,ei,zone:pl.mode==='full'?null:(zi++%2?'bottom':'top')};
+    for(let i=si;i<=ei;i++)if(!S.segs[i].vis)S.segs[i].vis=v});
+  S.segs.forEach((sg,i)=>{if(sg.vis)return;const ok=(sg.brands||[]).map(b=>S.logos[brandKey(b)]).filter(l=>l&&l.state==='ok');
+    if(ok.length)sg.vis={kind:'logos',imgs:ok.slice(0,3).map(l=>l.img),mode:'card',enter:LOGO_ENTER[i%LOGO_ENTER.length],si:i,ei:i,zone:(zi++%2?'bottom':'top')}});
   total=Math.max(0,t-S.gap);
   $('seek').max=total||1;
   S.segs.forEach((sg,i)=>{const r=document.querySelector(`[data-i="${i}"]`);if(!r)return;
@@ -283,16 +318,17 @@ function compute(){
 }
 function renderSegs(){
   $('segs').innerHTML=S.segs.map((sg,i)=>`<div class="seg" data-i="${i}"><div class="n">${i+1}</div>
-    <textarea>${sg.text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+    <div class="mid"><textarea>${sg.text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea><div class="brands"></div></div>
     <div class="side"><div class="row"><button data-a="rm" title="Темп −">−</button><span class="rv"></span><button data-a="rp" title="Темп +">+</button></div>
     <div class="row"><button data-a="go" title="Перейти">▶</button><span class="d"></span><button data-a="del" title="Удалить">✕</button></div>
     <div class="row"><button data-a="bl" title="Граница с следующей репликой раньше">‹</button><span>граница</span><button data-a="br" title="Граница с следующей репликой позже">›</button></div></div></div>`).join('');
-  compute()}
+  compute();updateChips();renderMedia()}
 $('segs').addEventListener('input',e=>{
   if(e.target.tagName!=='TEXTAREA')return;const i=+e.target.closest('.seg').dataset.i;
   S.segs[i].text=e.target.value;S.segs[i].buf=null;compute()});
 $('segs').addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;const i=+b.closest('.seg').dataset.i,sg=S.segs[i];
+  if(b.dataset.a==='rb'){sg.brands.splice(+b.dataset.bi,1);updateChips();compute();return}
   if(b.dataset.a==='rm')sg.rate=Math.max(.6,+(sg.rate-.05).toFixed(2));
   if(b.dataset.a==='rp')sg.rate=Math.min(1.6,+(sg.rate+.05).toFixed(2));
   if(b.dataset.a==='go'){seekTo(sg.start);return}
@@ -410,9 +446,10 @@ function glassPanel(g,bw,bh,size,t){
   if(g.roundRect)g.roundRect(x,y,w,hh,r);else g.rect(x,y,w,hh);
   g.fillStyle='rgba(255,255,255,.12)';g.fill();g.lineWidth=1.5;g.strokeStyle='rgba(255,255,255,.28)';g.stroke();g.restore()}
 
-function drawChunk(g,w,h,ch,gi,age,p,cdur){
+const ZL={top:[5,4,6],bottom:[0,1,2]};   // если сверху/снизу занято логотипом или медиа, текст уходит в свободную половину
+function drawChunk(g,w,h,ch,gi,age,p,cdur,zone){
   const an=ANIMS[animFor(gi)];
-  const slot=CFG.layout==='auto'?SLOTS[ORDER[gi%ORDER.length]]:SLOTS[{top:0,center:3,bottom:6}[CFG.layout]];
+  const slot=zone?SLOTS[ZL[zone][gi%3]]:CFG.layout==='auto'?SLOTS[ORDER[gi%ORDER.length]]:SLOTS[{top:0,center:3,bottom:6}[CFG.layout]];
   const M=w*.07+(an.glass?w*.04:0),maxW=w-2*M;
   g.save();g.textBaseline='middle';g.textAlign='left';g.shadowBlur=0;
   let size=CFG.size;const setF=s=>g.font=`800 ${s}px "${CFG.font}",sans-serif`;setF(size);
@@ -428,7 +465,7 @@ function drawChunk(g,w,h,ch,gi,age,p,cdur){
   let acc=0,act=ch.words.length-1;for(let i=0;i<ch.words.length;i++){acc+=ch.words[i].length+1;if(pc*tot<acc){act=i;break}}
   g.translate(xc,yc);const t=age*ts;
   if(an.glass)glassPanel(g,bw,bh,size,t);
-  renderText(g,lines,slot.a,bw,bh,lh,size,an,t,wi=>CFG.karaoke==='1'&&wi===act?PRI:CFG.acc2);
+  renderText(g,lines,slot.a,bw,bh,lh,size,an,t,wi=>CFG.karaoke==='1'&&wi===act?HI():CFG.acc2);
   g.restore()}
 
 /* Превью анимации в библиотеке: слово зацикленно появляется на тёмной карточке */
@@ -442,6 +479,100 @@ function drawAnimCard(c,T){
   if(an.glass)glassPanel(g,bw,bh,size,t);
   renderText(g,[[word]],'c',bw,bh,bh,size,an,t,()=>CFG.acc2);g.restore()}
 
+/* ── Логотипы компаний и свои медиа ── */
+const ENTERS=['pop','slide-up','slide-left','slide-right','zoom','flip','blur'],LOGO_ENTER=['pop','slide-up','zoom','slide-left','flip','slide-right','blur'];
+const brandKey=b=>(b.domain||b.name||'').toLowerCase();
+function updateChips(){
+  document.querySelectorAll('#segs .seg').forEach(r=>{const sg=S.segs[+r.dataset.i],box=r.querySelector('.brands');if(!sg||!box)return;
+    box.innerHTML=(sg.brands||[]).map((b,bi)=>{const l=S.logos[brandKey(b)],st=!l||l.state==='loading'?'⏳':l.state==='ok'?'✓':'логотип не найден';
+      return `<span class="bchip" title="${(l&&l.err||'').replace(/"/g,'')}">${b.name.replace(/</g,'&lt;')} ${st}<button data-a="rb" data-bi="${bi}">✕</button></span>`}).join('')})}
+async function loadLogos(){
+  const todo=[];S.segs.forEach(sg=>(sg.brands||[]).forEach(b=>{const k=brandKey(b);if(k&&!S.logos[k]){S.logos[k]={state:'loading'};todo.push([k,b])}}));
+  updateChips();let i=0;
+  const work=async()=>{while(i<todo.length){const [k,b]=todo[i++];
+    try{const d=await api('/logo',{name:b.name,domain:b.domain});const img=new Image();img.src='data:'+d.mime+';base64,'+d.b64;await img.decode();S.logos[k]={state:'ok',img}}
+    catch(e){S.logos[k]={state:'fail',err:e.message}}
+    updateChips();compute()}};
+  await Promise.all([work(),work()])}
+
+function renderMedia(){
+  $('mlist').innerHTML=S.media.map((m,i)=>{const pl=S.place.find(p=>p.m===m),si=pl?S.segs.indexOf(pl.sg):-1;
+    const th=m.type==='video'?`<video src="${m.url}" muted playsinline></video>`:`<img src="${m.url}" alt="">`;
+    return `<div class="mrow" data-m="${i}"><div class="th">${th}</div><div class="mi"><b></b><small>${m.type==='video'?'видео':'фото'}</small>
+      <div class="two"><select data-f="seg"><option value="-1">не показывать</option>${S.segs.map((s,k)=>`<option value="${k}"${k===si?' selected':''}>реплика ${k+1}</option>`).join('')}</select>
+      <select data-f="mode"><option value="card"${pl&&pl.mode==='card'?' selected':''}>Карточка</option><option value="full"${pl&&pl.mode==='full'?' selected':''}>На весь кадр</option></select></div></div>
+      <button class="btn sm ghost" data-a="rmm">✕</button></div>`}).join('');
+  [...$('mlist').querySelectorAll('.mrow')].forEach((r,i)=>r.querySelector('b').textContent=S.media[i].desc)}
+$('mlist').addEventListener('change',e=>{
+  const t=e.target,r=t.closest('.mrow');if(!r)return;const m=S.media[+r.dataset.m],pl=S.place.find(p=>p.m===m);
+  if(t.dataset.f==='seg'){const k=+t.value;S.place=S.place.filter(p=>p.m!==m);if(k>=0)S.place.push({m,sg:S.segs[k],span:1,mode:pl?pl.mode:'card',enter:pl?pl.enter:'pop'})}
+  if(t.dataset.f==='mode'&&pl)pl.mode=t.value;
+  compute()});
+$('mlist').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b||b.dataset.a!=='rmm')return;const i=+b.closest('.mrow').dataset.m,m=S.media[i];
+  if(m.type==='video')m.el.pause();URL.revokeObjectURL(m.url);S.place=S.place.filter(p=>p.m!==m);S.media.splice(i,1);renderMedia();compute()});
+async function placeMedia(){
+  const fresh=S.media.filter(m=>!S.place.some(p=>p.m===m));if(!fresh.length||!S.segs.length)return;
+  const st=$('mstat');st.textContent='Нейросеть выбирает кадр и оформление…';
+  try{
+    const busy=[...new Set(S.place.flatMap(p=>{const si=S.segs.indexOf(p.sg);return si<0?[]:Array.from({length:p.span},(_,k)=>si+k)}))];
+    const d=await api('/place',{segments:S.segs.map(x=>x.text),busy,media:fresh.map(m=>({type:m.type,desc:m.desc,dur:m.dur}))});
+    const used=new Set(busy);
+    (d.placements||[]).forEach(p=>{const m=fresh[p.media];if(!m||S.place.some(x=>x.m===m))return;
+      let si=Math.max(0,Math.min(S.segs.length-1,+p.segment||0));while(used.has(si)&&si<S.segs.length-1)si++;if(used.has(si))return;
+      const span=Math.max(1,Math.min(3,+p.span||1));for(let k=0;k<span&&si+k<S.segs.length;k++)used.add(si+k);
+      S.place.push({m,sg:S.segs[si],span,mode:p.mode==='full'?'full':'card',enter:ENTERS.includes(p.enter)?p.enter:'pop'})});
+    st.textContent='Медиа расставлены. Если кадр или оформление не подошли, поменяй их в списке ниже.';
+  }catch(e){st.textContent='';showErr('Не удалось расставить медиа: '+e.message)}
+  renderMedia();compute()}
+$('madd').onclick=async()=>{
+  showErr('');const f=$('mfile').files[0];if(!f){showErr('Выбери фото или видео.');return}
+  const type=f.type.startsWith('video')?'video':'image',url=URL.createObjectURL(f);let el;
+  try{
+    if(type==='video'){el=document.createElement('video');el.muted=true;el.loop=true;el.playsInline=true;el.preload='auto';el.src=url;
+      await new Promise((ok,no)=>{el.onloadeddata=ok;el.onerror=()=>no(new Error('браузер не открыл это видео'))})}
+    else{el=new Image();el.src=url;await el.decode()}
+  }catch(e){URL.revokeObjectURL(url);showErr('Не удалось добавить файл: '+e.message);return}
+  S.media.push({type,url,el,desc:$('mdesc').value.trim()||f.name,dur:type==='video'?el.duration:0});
+  $('mfile').value='';$('mdesc').value='';renderMedia();placeMedia()};
+
+/* Появление логотипов и медиа в кадре */
+function rr(g,x,y,w,h,r){g.beginPath();if(g.roundRect)g.roundRect(x,y,w,h,r);else g.rect(x,y,w,h)}
+const natSize=el=>el.tagName==='VIDEO'?[el.videoWidth,el.videoHeight]:[el.naturalWidth,el.naturalHeight];
+function enterP(style,age,w,h){
+  const eu=E1(Math.max(0,Math.min(1,age/.7))),eo=E2(Math.max(0,Math.min(1,age/.8))),P={a:eu,tx:0,ty:0,s:1,sx:1};
+  if(style==='pop'){P.s=.4+.6*eo;P.a=Math.min(1,age/.15)}
+  else if(style==='slide-up')P.ty=(1-eu)*h*.18;
+  else if(style==='slide-left')P.tx=-(1-eu)*w*.6;
+  else if(style==='slide-right')P.tx=(1-eu)*w*.6;
+  else if(style==='zoom')P.s=1.45-.45*eu;
+  else if(style==='flip')P.sx=Math.max(.001,Math.abs(Math.cos((1-eu)*Math.PI/2)));
+  else P.s=1.12-.12*eu;
+  return P}
+function syncVideo(el,t){const d=el.duration||1,want=t%d;if(Math.abs(el.currentTime-want)>.35){try{el.currentTime=want}catch(e){}}
+  if(playing){if(el.paused)el.play().catch(()=>{})}else if(!el.paused)el.pause()}
+function drawVisual(g,w,h,v,pos){
+  const s0=S.segs[v.si],s1=S.segs[v.ei];if(!s0||!s1)return;
+  const age=Math.max(0,pos-s0.start),out=Math.max(0,Math.min(1,(s1.start+s1.dur-pos)/.25)),P=enterP(v.mode==='full'?'zoom':v.enter,age,w,h);
+  g.save();g.globalAlpha=Math.max(0,Math.min(1,P.a))*out;
+  if(v.kind==='media'){
+    const el=v.m.el;if(el.tagName==='VIDEO')syncVideo(el,pos-s0.start);
+    const [iw,ih]=natSize(el);if(!iw){g.restore();return}
+    if(v.mode==='full'){const sc=Math.max(w/iw,h/ih)*(1+.06*Math.min(1,age/6));
+      g.drawImage(el,w/2-iw*sc/2,h/2-ih*sc/2,iw*sc,ih*sc);g.fillStyle='rgba(0,0,0,.38)';g.fillRect(0,0,w,h);g.restore();return}
+    const cy=v.zone==='bottom'?h*.73:h*.27,sc=Math.min(w*.84/iw,h*.34/ih),dw=iw*sc,dh=ih*sc,r=Math.min(30,dh*.1);
+    g.translate(w/2+P.tx,cy+P.ty);g.scale(P.s*P.sx,P.s);
+    g.shadowColor='rgba(0,0,0,.55)';g.shadowBlur=34;g.fillStyle='#000';rr(g,-dw/2,-dh/2,dw,dh,r);g.fill();g.shadowBlur=0;
+    g.save();rr(g,-dw/2,-dh/2,dw,dh,r);g.clip();g.drawImage(el,-dw/2,-dh/2,dw,dh);g.restore();
+    rr(g,-dw/2,-dh/2,dw,dh,r);g.lineWidth=2;g.strokeStyle='rgba(255,255,255,.35)';g.stroke()
+  }else{
+    const n=v.imgs.length,gap=20,plw=Math.min(w*.5,(w*.84-(n-1)*gap)/n),plh=Math.min(h*.2,plw*.7),cy=v.zone==='bottom'?h*.73:h*.27;
+    g.translate(w/2+P.tx,cy+P.ty);g.scale(P.s*P.sx,P.s);
+    v.imgs.forEach((im,i)=>{const x=-(n*plw+(n-1)*gap)/2+i*(plw+gap),sc=Math.min(plw*.68/im.naturalWidth,plh*.68/im.naturalHeight),dw=im.naturalWidth*sc,dh=im.naturalHeight*sc;
+      g.save();g.shadowColor='rgba(0,0,0,.5)';g.shadowBlur=30;g.fillStyle='#fff';rr(g,x,-plh/2,plw,plh,plh*.22);g.fill();g.restore();
+      g.drawImage(im,x+plw/2-dw/2,-dh/2,dw,dh)})}
+  g.restore()}
+
 const vc=$('vc'),vg=vc.getContext('2d',{alpha:false});
 function curSeg(){let si=-1;S.segs.forEach((s,i)=>{if(pos>=s.start&&pos<s.start+s.dur+S.gap+.001)si=i});return si<0?(S.segs.length&&pos>=total?S.segs.length-1:0):si}
 // Фон меняется только на границе реплик: номер фона зависит от номера реплики
@@ -450,9 +581,13 @@ function drawVideo(T){
   const si=curSeg(),sg=S.segs[si],b=planBg(Math.max(0,si));
   if(!vidInst||b!==curBg){curBg=b;vidInst=BACKGROUNDS[b].create(VWd,VHt)}
   vg.setTransform(1,0,0,1,0,0);vg.globalAlpha=1;vg.shadowBlur=0;vidInst.draw(vg,T,VWd,VHt);vg.shadowBlur=0;vg.globalAlpha=1;
+  const v=sg&&sg.vis,full=v&&v.mode==='full'&&v.kind==='media';
+  if(!full&&+CFG.dim>0){vg.fillStyle='rgba(0,0,0,'+(CFG.dim/100)+')';vg.fillRect(0,0,VWd,VHt)}   // затемнение фона для читаемости текста
+  S.media.forEach(m=>{if(m.type==='video'&&(!v||v.m!==m)&&!m.el.paused)m.el.pause()});
+  if(v)drawVisual(vg,VWd,VHt,v,pos);
   if(sg&&sg.chunks&&sg.chunks.length&&pos>=sg.start-.001){
     const p=Math.min(.9999,Math.max(0,(pos-sg.start)/sg.dur)),ci=Math.max(0,sg.chunks.findIndex(c=>p<c.t1)),ch=sg.chunks[ci];
-    drawChunk(vg,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p,(ch.t1-ch.t0)*sg.dur)}
+    drawChunk(vg,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p,(ch.t1-ch.t0)*sg.dur,v&&v.zone)}
   $('tm').textContent=fmt(pos)+' / '+fmt(total)}
 
 /* Выбор фона */
@@ -473,10 +608,10 @@ $('gen').onclick=async()=>{
   showErr('');pause();const b=$('gen');b.disabled=true;b.textContent='Пишу сценарий…';
   try{
     const d=await api('/script',{prompt,tone:CFG.tone,seconds:+CFG.secs,bgs:BACKGROUNDS.map(x=>x.name)});
-    S.segs=d.segments.map(s=>({text:String(s.text).trim(),rate:1,buf:null}));S.hasTTS=false;S.title=d.title||'';animSeq.length=0;
+    S.segs=d.segments.map(s=>({text:String(s.text).trim(),rate:1,buf:null,brands:(Array.isArray(s.brands)?s.brands:[]).filter(b=>b&&b.name).slice(0,3)}));S.place=[];S.hasTTS=false;S.title=d.title||'';animSeq.length=0;
     $('vtitle').textContent=S.title;$('result').hidden=false;
     const bi=BACKGROUNDS.findIndex(x=>x.name===d.background);selectBg(bi>=0?bi:S.bg);
-    pos=0;renderSegs();$('result').scrollIntoView({behavior:'smooth'})
+    pos=0;renderSegs();$('result').scrollIntoView({behavior:'smooth'});loadLogos();placeMedia()
   }catch(e){showErr('Не удалось создать сценарий: '+e.message)}
   b.disabled=false;b.textContent='Создать сценарий'};
 
@@ -612,6 +747,7 @@ bind('font','font',fontLoad);bind('size','size',fontLoad);bind('layout','layout'
 bind('tone','tone');bind('secs','secs');bind('voice','voice');
 $('anim').innerHTML='<option value="rand">Случайная, без повторов</option>'+ANIMS.map((a,i)=>`<option value="${i}">${String(i+1).padStart(2,'0')} · ${a.n}</option>`).join('');
 bind('anim','anim',syncAnim);syncAnim();
+bind('hiAuto','hiAuto',refreshHi);bind('hi','hi',refreshHi);bind('dim','dim',()=>{$('dimv').textContent=CFG.dim+'%'});$('dimv').textContent=CFG.dim+'%';refreshHi();
 $('acc').oninput=e=>setAcc(e.target.value);
 $('acc2').value=CFG.acc2;$('acc2').oninput=e=>{CFG.acc2=e.target.value;save();fontLoad()};
 $('sp').oninput=e=>{S.speed=+e.target.value;$('spv').textContent=S.speed.toFixed(2)+'×';compute()};
