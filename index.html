@@ -72,6 +72,11 @@ input[type=range]{accent-color:var(--pri);width:100%}
 .grid[hidden]{display:none}
 .agrid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
 .card.acard{aspect-ratio:16/10}
+input[type=text]{width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:12px;color:var(--txt);font:inherit;font-size:15px;padding:12px;outline:none}
+input[type=text]:focus{border-color:var(--pri)}
+.chk{display:flex;gap:10px;align-items:center;margin:14px 0 4px;font-size:14px;cursor:pointer}
+.chk input{width:20px;height:20px;accent-color:var(--pri)}
+#adBox{margin-top:10px;padding:14px;border-radius:14px;border:1px solid color-mix(in srgb,var(--pri) 35%,transparent);background:rgba(255,255,255,.03)}
 .seg .mid{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
 .brands{display:flex;gap:6px;flex-wrap:wrap}.brands:empty{display:none}
 .bchip{font-size:11px;padding:4px 4px 4px 9px;border-radius:14px;background:rgba(255,255,255,.08);color:var(--txt);display:inline-flex;gap:6px;align-items:center}
@@ -90,6 +95,13 @@ input[type=range]{accent-color:var(--pri);width:100%}
   <header><div class="logo">Clipzy</div><h2>Создать</h2></header>
   <div id="err"></div>
   <textarea id="prompt" rows="3" placeholder="О чём видео? Например: почему большинство людей зря платят за подписки"></textarea>
+  <label class="chk"><input type="checkbox" id="adOn"> Реклама в видео</label>
+  <div id="adBox" hidden>
+    <label class="field">Кого рекламируем (название)<input type="text" id="adName" placeholder="Например: DinoVPN"></label>
+    <label class="field">Логотип<input type="file" id="adLogo" accept="image/*" style="color:var(--mut)"></label>
+    <label class="field">Идея рекламы<textarea id="adIdea" rows="3" placeholder="Что рекламируем и что важно сказать: чем полезно, кому, что предлагаете"></textarea></label>
+    <label class="field">Ссылка или тег в соцсети<input type="text" id="adLink" placeholder="t.me/name, @name или сайт"></label>
+  </div>
   <button class="btn full" id="gen">Создать сценарий</button>
 
   <div id="result" hidden>
@@ -307,6 +319,10 @@ function compute(){
   S.place.forEach(pl=>{const si=S.segs.indexOf(pl.sg);if(si<0)return;const ei=Math.min(S.segs.length-1,si+pl.span-1);
     const v={kind:'media',m:pl.m,mode:pl.mode,enter:pl.enter,si,ei,zone:pl.mode==='full'?null:(zi++%2?'bottom':'top')};
     for(let i=si;i<=ei;i++)if(!S.segs[i].vis)S.segs[i].vis=v});
+  if(S.ad){let i=0;while(i<S.segs.length){
+    if(S.segs[i].ad&&!S.segs[i].vis){let j=i;while(j+1<S.segs.length&&S.segs[j+1].ad&&!S.segs[j+1].vis)j++;
+      const v={kind:'logos',imgs:S.ad.img?[S.ad.img]:[],cta:S.ad.link||'',ctaAt:S.segs[j].start,mode:'card',enter:'pop',si:i,ei:j,zone:(zi++%2?'bottom':'top')};
+      for(let k=i;k<=j;k++)S.segs[k].vis=v;i=j+1}else i++}}
   S.segs.forEach((sg,i)=>{if(sg.vis)return;const ok=(sg.brands||[]).map(b=>S.logos[brandKey(b)]).filter(l=>l&&l.state==='ok');
     if(ok.length)sg.vis={kind:'logos',imgs:ok.slice(0,3).map(l=>l.img),mode:'card',enter:LOGO_ENTER[i%LOGO_ENTER.length],si:i,ei:i,zone:(zi++%2?'bottom':'top')}});
   total=Math.max(0,t-S.gap);
@@ -484,10 +500,10 @@ const ENTERS=['pop','slide-up','slide-left','slide-right','zoom','flip','blur'],
 const brandKey=b=>(b.domain||b.name||'').toLowerCase();
 function updateChips(){
   document.querySelectorAll('#segs .seg').forEach(r=>{const sg=S.segs[+r.dataset.i],box=r.querySelector('.brands');if(!sg||!box)return;
-    box.innerHTML=(sg.brands||[]).map((b,bi)=>{const l=S.logos[brandKey(b)],st=!l||l.state==='loading'?'⏳':l.state==='ok'?'✓':'логотип не найден';
+    box.innerHTML=(sg.ad?'<span class="bchip" style="background:var(--pri);color:#001014;font-weight:700">реклама</span>':'')+(sg.brands||[]).map((b,bi)=>{const l=S.logos[brandKey(b)],st=!l||l.state==='loading'?'⏳':l.state==='ok'?'✓':'логотип не найден';
       return `<span class="bchip" title="${(l&&l.err||'').replace(/"/g,'')}">${b.name.replace(/</g,'&lt;')} ${st}<button data-a="rb" data-bi="${bi}">✕</button></span>`}).join('')})}
 async function loadLogos(){
-  const todo=[];S.segs.forEach(sg=>(sg.brands||[]).forEach(b=>{const k=brandKey(b);if(k&&!S.logos[k]){S.logos[k]={state:'loading'};todo.push([k,b])}}));
+  const todo=[];S.segs.forEach(sg=>(sg.ad&&S.ad&&S.ad.img?[]:(sg.brands||[])).forEach(b=>{const k=brandKey(b);if(k&&!S.logos[k]){S.logos[k]={state:'loading'};todo.push([k,b])}}));
   updateChips();let i=0;
   const work=async()=>{while(i<todo.length){const [k,b]=todo[i++];
     try{const d=await api('/logo',{name:b.name,domain:b.domain});const img=new Image();img.src='data:'+d.mime+';base64,'+d.b64;await img.decode();S.logos[k]={state:'ok',img}}
@@ -566,11 +582,18 @@ function drawVisual(g,w,h,v,pos){
     g.save();rr(g,-dw/2,-dh/2,dw,dh,r);g.clip();g.drawImage(el,-dw/2,-dh/2,dw,dh);g.restore();
     rr(g,-dw/2,-dh/2,dw,dh,r);g.lineWidth=2;g.strokeStyle='rgba(255,255,255,.35)';g.stroke()
   }else{
-    const n=v.imgs.length,gap=20,plw=Math.min(w*.5,(w*.84-(n-1)*gap)/n),plh=Math.min(h*.2,plw*.7),cy=v.zone==='bottom'?h*.73:h*.27;
+    const base=g.globalAlpha,n=v.imgs.length,gap=20,plw=Math.min(w*.5,(w*.84-(n-1)*gap)/n),plh=Math.min(h*.2,plw*.7),cy=v.zone==='bottom'?h*.73:h*.27;
     g.translate(w/2+P.tx,cy+P.ty);g.scale(P.s*P.sx,P.s);
     v.imgs.forEach((im,i)=>{const x=-(n*plw+(n-1)*gap)/2+i*(plw+gap),sc=Math.min(plw*.68/im.naturalWidth,plh*.68/im.naturalHeight),dw=im.naturalWidth*sc,dh=im.naturalHeight*sc;
       g.save();g.shadowColor='rgba(0,0,0,.5)';g.shadowBlur=30;g.fillStyle='#fff';rr(g,x,-plh/2,plw,plh,plh*.22);g.fill();g.restore();
-      g.drawImage(im,x+plw/2-dw/2,-dh/2,dw,dh)})}
+      g.drawImage(im,x+plw/2-dw/2,-dh/2,dw,dh)});
+    if(v.cta&&pos>=v.ctaAt-.001){   // ссылка или тег плавно появляется в последней рекламной реплике
+      g.globalAlpha=base*Math.min(1,(pos-v.ctaAt)/.35);let fs=Math.min(46,w*.07);const t=v.cta;
+      g.font=`800 ${fs}px "${CFG.font}",sans-serif`;g.textAlign='center';g.textBaseline='middle';
+      while(g.measureText(t).width>w*.84-fs*1.4&&fs>18){fs-=2;g.font=`800 ${fs}px "${CFG.font}",sans-serif`}
+      const tw=g.measureText(t).width+fs*1.4,py=n?plh/2+fs*1.4:0;
+      rr(g,-tw/2,py-fs*.9,tw,fs*1.8,fs*.9);g.fillStyle='rgba(10,12,20,.85)';g.fill();g.lineWidth=2;g.strokeStyle=HI();g.stroke();
+      g.fillStyle='#fff';g.fillText(t,0,py+2)}}
   g.restore()}
 
 const vc=$('vc'),vg=vc.getContext('2d',{alpha:false});
@@ -603,12 +626,19 @@ async function api(path,body){
   let d;try{d=await r.json()}catch(e){throw new Error('Воркер вернул не JSON (код '+r.status+'). Нужен код из worker.js.')}
   if(!r.ok||d.error)throw new Error(d.error||('Ошибка '+r.status));return d}
 
+$('adOn').onchange=()=>{$('adBox').hidden=!$('adOn').checked};
+$('adLogo').onchange=async e=>{S.adImg=null;const f=e.target.files[0];if(!f)return;const img=new Image();img.src=URL.createObjectURL(f);
+  try{await img.decode();S.adImg=img}catch(err){showErr('Не удалось открыть логотип. Попробуй PNG или JPG.')}};
 $('gen').onclick=async()=>{
   const prompt=$('prompt').value.trim();if(!prompt){showErr('Напиши, о чём должно быть видео.');return}
-  showErr('');pause();const b=$('gen');b.disabled=true;b.textContent='Пишу сценарий…';
+  showErr('');pause();
+  let ad=null;if($('adOn').checked){ad={name:$('adName').value.trim(),idea:$('adIdea').value.trim(),link:$('adLink').value.trim()};
+    if(!ad.name||!ad.idea){showErr('Для рекламы заполни название и идею.');return}}
+  const b=$('gen');b.disabled=true;b.textContent='Пишу сценарий…';
   try{
-    const d=await api('/script',{prompt,tone:CFG.tone,seconds:+CFG.secs,bgs:BACKGROUNDS.map(x=>x.name)});
-    S.segs=d.segments.map(s=>({text:String(s.text).trim(),rate:1,buf:null,brands:(Array.isArray(s.brands)?s.brands:[]).filter(b=>b&&b.name).slice(0,3)}));S.place=[];S.hasTTS=false;S.title=d.title||'';animSeq.length=0;
+    const d=await api('/script',{prompt,tone:CFG.tone,seconds:+CFG.secs,bgs:BACKGROUNDS.map(x=>x.name),ad});
+    S.ad=ad?{...ad,img:S.adImg||null}:null;
+    S.segs=d.segments.map(s=>({text:String(s.text).trim(),rate:1,buf:null,ad:!!(ad&&s.ad),brands:(Array.isArray(s.brands)?s.brands:[]).filter(b=>b&&b.name).slice(0,3)}));S.place=[];S.hasTTS=false;S.title=d.title||'';animSeq.length=0;
     $('vtitle').textContent=S.title;$('result').hidden=false;
     const bi=BACKGROUNDS.findIndex(x=>x.name===d.background);selectBg(bi>=0?bi:S.bg);
     pos=0;renderSegs();$('result').scrollIntoView({behavior:'smooth'});loadLogos();placeMedia()
