@@ -66,6 +66,12 @@ input[type=range]{accent-color:var(--pri);width:100%}
 .nav{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:84px;padding:9px 12px;border-radius:18px;border:0;background:none;color:var(--mut);font:600 11px inherit;font-family:inherit;cursor:pointer;transition:.2s}
 .nav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .nav.active{color:#001014;background:var(--pri)}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{border:1px solid rgba(255,255,255,.15);background:none;color:var(--mut);padding:9px 16px;border-radius:20px;font:600 13px inherit;font-family:inherit;cursor:pointer}
+.tab.on{background:var(--pri);color:#001014;border-color:var(--pri)}
+.grid[hidden]{display:none}
+.agrid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.card.acard{aspect-ratio:16/10}
 @media (prefers-reduced-motion:reduce){#island{animation:none}}
 </style>
 </head>
@@ -112,7 +118,10 @@ input[type=range]{accent-color:var(--pri);width:100%}
 <!-- БИБЛИОТЕКА -->
 <section class="screen active" id="library"><div class="wrap" style="max-width:900px">
   <header><div class="logo">Clipzy</div><h2>Библиотека</h2></header>
+  <div class="tabs"><button class="tab on" data-t="bg">Фоны</button><button class="tab" data-t="an">Анимации текста</button></div>
+  <p class="note" id="anote" hidden style="margin:0 0 14px">Нажми на анимацию, чтобы использовать только её. Повторное нажатие вернёт случайный выбор без повторов.</p>
   <div class="grid" id="grid"></div>
+  <div class="grid agrid" id="agrid" hidden></div>
 </div></section>
 
 <!-- НАСТРОЙКИ -->
@@ -141,6 +150,7 @@ input[type=range]{accent-color:var(--pri);width:100%}
   </div>
   <div class="two">
     <label class="field">Слов за раз<select id="chunk"><option value="1">По одному</option><option value="2">Одно-два</option></select></label>
+    <label class="field">Анимация появления<select id="anim"></select></label>
   </div>
 
   <h4>Подача сценария</h4>
@@ -172,7 +182,7 @@ document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{
 /* Настройки (хранятся в браузере) */
 const FONTS=['Montserrat','Inter','Oswald','Rubik','Playfair Display','Unbounded','Russo One'];
 const VOICES=['Kore','Puck','Charon','Fenrir','Aoede','Zephyr','Orus','Leda','Algenib','Sulafat'];
-const DEF={acc:'#00f0ff',acc2:'#ffffff',font:'Montserrat',size:58,layout:'auto',chunk:'2',bgmode:'3',look:'outline',upper:'1',karaoke:'1',tone:'Дерзкий',secs:'45',voice:'Kore'};
+const DEF={acc:'#00f0ff',acc2:'#ffffff',font:'Montserrat',size:58,layout:'auto',anim:'rand',chunk:'2',bgmode:'3',look:'outline',upper:'1',karaoke:'1',tone:'Дерзкий',secs:'45',voice:'Kore'};
 let CFG={...DEF};
 try{Object.assign(CFG,JSON.parse(localStorage.getItem('clipzy')||'{}'))}catch(e){}
 const save=()=>{try{localStorage.setItem('clipzy',JSON.stringify(CFG))}catch(e){}};
@@ -315,34 +325,122 @@ function chunksOf(sg){
   const key=sg.text+'|'+CFG.upper+'|'+CFG.chunk;let c=chunkCache.get(key);if(c)return c;
   const words=(CFG.upper==='1'?sg.text.toUpperCase():sg.text).trim().split(/\s+/).filter(Boolean),max=CFG.chunk==='1'?1:2;c=[];
   for(let i=0;i<words.length;){
-    let n=1;if(max===2&&i+1<words.length&&!/[.!?,;:—…]$/.test(words[i])&&words[i].length+words[i+1].length<=13)n=2;
-    c.push({words:words.slice(i,i+n)});i+=n}
+    const grp=[words[i++]];
+    if(isPrep(grp[0])){while(i<words.length&&grp.length<3){grp.push(words[i++]);if(!isPrep(grp[grp.length-1]))break}}   // предлог всегда идёт вместе со следующим словом
+    else if(max===2&&i<words.length&&!/[.!?,;:—…]$/.test(grp[0])&&!isPrep(words[i])&&grp[0].length+words[i].length<=13)grp.push(words[i++]);
+    c.push({words:grp})}
   let tot=0;c.forEach(x=>{x.wt=x.words.reduce((a,w)=>a+w.length+1,0)+2;tot+=x.wt});
   let acc=0;c.forEach(x=>{x.t0=acc/tot;acc+=x.wt;x.t1=acc/tot});
   if(chunkCache.size>300)chunkCache.clear();chunkCache.set(key,c);return c}
-function drawChunk(g,w,h,ch,gi,age,p){
+/* ── Предлоги и союзы: не стоят в конце кусочка, а начинают новый вместе со следующим словом ── */
+const PREP=new Set('в во на с со к ко по о об обо от ото до из изо за для при без безо под подо над надо про у не ни но а и или что как чем чтоб чтобы через между перед после ради кроме вне среди сквозь возле около the a an in on at to of for with by and or but'.split(' '));
+const isPrep=w=>!/[.!?,;:—…»)]$/.test(w)&&PREP.has(w.toLowerCase().replace(/[«"'(]/g,''));
+
+/* ── 20 анимаций появления по буквам (из присланного кода), переписаны на canvas ── */
+const pw=(u,s)=>{if(u<=s[0][0])return s[0][1];for(let i=1;i<s.length;i++)if(u<=s[i][0]){const a=s[i-1],b=s[i];return a[1]+(b[1]-a[1])*(u-a[0])/(b[0]-a[0])}return s[s.length-1][1]};
+const Lr=(a,b,u)=>a+(b-a)*u;
+function bez(x1,y1,x2,y2){return x=>{if(x<=0)return 0;if(x>=1)return 1;let lo=0,hi=1,t=x;
+  for(let i=0;i<24;i++){t=(lo+hi)/2;const cx=3*x1*t*(1-t)*(1-t)+3*x2*t*t*(1-t)+t*t*t;if(cx<x)lo=t;else hi=t}
+  return 3*y1*t*(1-t)*(1-t)+3*y2*t*t*(1-t)+t*t*t}}
+const E1=bez(.16,1,.3,1),E2=bez(.34,1.56,.64,1),EL=x=>x,STAG=.055,RAD=Math.PI/180;
+const ANIMS=[
+{n:'Stretch Y',d:.9,e:E1,f:u=>({a:pw(u,[[0,0],[.55,1],[1,1]]),ty:Lr(.35,0,u),sy:Lr(3,1,u),sx:Lr(.35,1,u),blur:pw(u,[[0,.1],[.55,0],[1,0]])})},
+{n:'Glow In',d:1,e:E1,f:u=>({a:u,glow:(1-u)*.5,gc:'#9a7cff'})},
+{n:'Pop',d:.6,e:E2,f:u=>{const k=pw(u,[[0,0],[.6,1.18],[1,1]]);return{a:pw(u,[[0,0],[.6,1],[1,1]]),sx:k,sy:k}}},
+{n:'Glass',d:.8,e:E1,glass:true,f:u=>({a:u,ty:Lr(.25,0,u),sx:Lr(.8,1,u),sy:Lr(.8,1,u),blur:Lr(.05,0,u)})},
+{n:'Drop Top',d:.7,e:E1,f:u=>({a:u,ty:Lr(-1.7,0,u)})},
+{n:'Rise Bottom',d:.7,e:E1,f:u=>({a:u,ty:Lr(1.7,0,u)})},
+{n:'Slide Left',d:.75,e:E1,f:u=>({a:u,txw:Lr(-2,0,u)})},
+{n:'Slide Right',d:.75,e:E1,f:u=>({a:u,txw:Lr(2,0,u)})},
+{n:'Flip Y 3D',d:.9,e:E1,f:u=>({a:u,sx:Math.abs(Math.cos(Lr(90,0,u)*RAD))})},
+{n:'Flip X 3D',d:.9,e:E1,f:u=>({a:u,sy:Math.abs(Math.cos(Lr(90,0,u)*RAD))})},
+{n:'Neon',d:1.2,e:EL,f:u=>({a:pw(u,[[0,0],[.08,1],[.11,0],[.17,1],[.2,.15],[.25,1],[.28,.45],[.35,1],[1,1]]),glow:Lr(.5,.35,u),gc:'#ff2e8b'})},
+{n:'Blur Focus',d:1.1,e:E1,f:u=>({a:u,blur:Lr(.24,0,u),sx:Lr(1.35,1,u),sy:Lr(1.35,1,u)})},
+{n:'RGB Glitch',d:.9,e:E2,f:u=>({a:pw(u,[[0,0],[.2,1],[1,1]]),tx:pw(u,[[0,-.06],[.2,.06],[.4,-.03],[.6,.02],[.8,-.01],[1,0]]),rgb:pw(u,[[0,-.1],[.2,.1],[.4,-.06],[.6,.04],[.8,-.02],[1,0]])})},
+{n:'Clip Reveal',d:.8,e:E1,f:u=>({a:u,clip:u})},
+{n:'Outline Fill',d:.9,e:E1,f:u=>({fa:u,sa:1-u,sx:Lr(1.12,1,u),sy:Lr(1.12,1,u),blur:Lr(.02,0,u)})},
+{n:'Elastic',d:1,e:E2,f:u=>{const k=pw(u,[[0,.2],[.55,1.15],[.75,.95],[.9,1.03],[1,1]]);return{a:pw(u,[[0,0],[.55,1],[1,1]]),sx:k,sy:k}}},
+{n:'Rotate 180',d:.9,e:E2,f:u=>({a:u,rot:Lr(-180,0,u),sx:Lr(.3,1,u),sy:Lr(.3,1,u)})},
+{n:'Depth',d:1,e:E1,f:u=>({a:u,sx:Lr(.555,1,u),sy:Lr(.555,1,u)})},
+{n:'Spin',d:1.1,e:E1,f:u=>({a:u,rot:Lr(-720,0,u),sx:Lr(.1,1,u),sy:Lr(.1,1,u)})},
+{n:'Float Up',d:.85,e:E1,f:u=>({a:u,ty:Lr(.6,0,u),sx:Lr(.6,1,u),sy:Lr(.6,1,u)})}
+];
+const DEFP={a:1,tx:0,txw:0,ty:0,rot:0,sx:1,sy:1,blur:0,glow:0,gc:'#fff',rgb:0,clip:1,fa:1,sa:0};
+const animTotal=(an,n)=>(n-1)*STAG+an.d+(an.glass?.15:0);
+
+/* Случайный порядок без повторов: сначала проходим все 20, потом снова новая перемешанная колода */
+const animSeq=[];
+function animFor(gi){
+  if(CFG.anim!=='rand'&&ANIMS[+CFG.anim])return +CFG.anim;
+  while(animSeq.length<=gi){const bag=ANIMS.map((_,i)=>i).sort(()=>Math.random()-.5);
+    if(animSeq.length&&bag[0]===animSeq[animSeq.length-1])bag.push(bag.shift());animSeq.push(...bag)}
+  return animSeq[gi]}
+
+function drawLetter(g,c,x,y,wc,size,P,fill){
+  const a=Math.max(0,Math.min(1,P.a));if(a<.004||!P.sx||!P.sy)return;
+  g.save();g.translate(x+wc/2,y+.4*size);g.translate(P.tx*size+P.txw*wc,P.ty*size);g.rotate(P.rot*RAD);g.scale(P.sx,P.sy);g.translate(-wc/2,-.4*size);
+  if(P.clip<1){g.beginPath();g.rect(-size*.3,-.7*size*P.clip,wc+size*.6,1.4*size*P.clip);g.clip()}
+  const put=(al,col,stroke)=>{g.globalAlpha=al;g.fillStyle=col;g.strokeStyle=col;stroke?g.strokeText(c,0,0):g.fillText(c,0,0)};
+  const body=al=>{if(P.sa>0){g.lineWidth=Math.max(1,size*.03);put(al*P.sa,fill,true)}if(P.fa>0)put(al*P.fa,fill,false)};
+  if(P.rgb){const o=P.rgb*size;g.save();g.translate(o,0);put(a*.9,'#ff0040',false);g.restore();g.save();g.translate(-o,0);put(a*.9,'#00d4ff',false);g.restore()}
+  if(P.glow>0){g.shadowColor=P.gc;g.shadowBlur=P.glow*size}
+  const R=P.blur*size;
+  if(R>.6){   // мягкое размытие без canvas filter (работает и в Safari): несколько полупрозрачных копий по кругу
+    for(let i=0;i<8;i++){g.save();g.translate(Math.cos(i*Math.PI/4)*R*.55,Math.sin(i*Math.PI/4)*R*.55);body(a*.24);g.restore()}
+    body(a*.24)}
+  else body(a);
+  g.restore()}
+
+function renderText(g,lines,al,bw,bh,lh,size,an,t,colorOf){
+  const spw=g.measureText(' ').width;let k=0,wi=0;
+  lines.forEach((ln,li)=>{
+    const lw=g.measureText(ln.join(' ')).width,y=-bh/2+lh*(li+.5);
+    let x=al==='l'?-bw/2:al==='r'?bw/2-lw:-lw/2;
+    ln.forEach(wd=>{const col=colorOf(wi);
+      for(let ci=0;ci<wd.length;ci++){
+        const c=wd[ci],cx=x+g.measureText(wd.slice(0,ci)).width,wc=g.measureText(c).width;
+        const u=an.e(Math.max(0,Math.min(1,(t-k*STAG-(an.glass?.15:0))/an.d)));
+        drawLetter(g,c,cx,y,wc,size,Object.assign({},DEFP,an.f(u)),col);k++}
+      x+=g.measureText(wd).width+spw;wi++})})}
+
+function glassPanel(g,bw,bh,size,t){
+  const u=E1(Math.max(0,Math.min(1,t/.9)));if(u<=.003)return;
+  const px=size*.26,py=size*.14,x=-bw/2-px,y=-bh/2-py,w=bw+2*px,hh=bh+2*py,r=Math.min(hh/2,size*.6);
+  g.save();g.globalAlpha=u;g.scale(.85+.15*u,.85+.15*u);g.beginPath();
+  if(g.roundRect)g.roundRect(x,y,w,hh,r);else g.rect(x,y,w,hh);
+  g.fillStyle='rgba(255,255,255,.12)';g.fill();g.lineWidth=1.5;g.strokeStyle='rgba(255,255,255,.28)';g.stroke();g.restore()}
+
+function drawChunk(g,w,h,ch,gi,age,p,cdur){
+  const an=ANIMS[animFor(gi)];
   const slot=CFG.layout==='auto'?SLOTS[ORDER[gi%ORDER.length]]:SLOTS[{top:0,center:3,bottom:6}[CFG.layout]];
-  const M=w*.07,maxW=w-2*M;
-  g.save();g.textBaseline='middle';g.textAlign='left';g.lineJoin='round';g.shadowBlur=0;
+  const M=w*.07+(an.glass?w*.04:0),maxW=w-2*M;
+  g.save();g.textBaseline='middle';g.textAlign='left';g.shadowBlur=0;
   let size=CFG.size;const setF=s=>g.font=`800 ${s}px "${CFG.font}",sans-serif`;setF(size);
   let lines=[ch.words];
   const wid=ls=>Math.max(...ls.map(l=>g.measureText(l.join(' ')).width));
-  if(wid(lines)>maxW&&ch.words.length>1)lines=ch.words.map(x=>[x]);   // не влезло в строку — слова друг под другом
-  let bw=wid(lines);if(bw>maxW){size=Math.max(24,Math.floor(size*maxW/bw));setF(size);bw=wid(lines)}  // всё ещё не влезло — уменьшаем шрифт
+  if(wid(lines)>maxW&&ch.words.length>1&&!isPrep(ch.words[0]))lines=ch.words.map(x=>[x]);   // не влезло в строку — слова друг под другом (но предлог не отрываем от слова)
+  let bw=wid(lines);if(bw>maxW){size=Math.max(24,Math.floor(size*maxW/bw));setF(size);bw=wid(lines)}
   const lh=size*1.2,bh=lines.length*lh,pad=M+size*.1;
   const xc=slot.a==='c'?w/2:slot.a==='l'?M+bw/2:w-M-bw/2;
-  const yc=Math.min(h-pad-bh/2,Math.max(pad+bh/2,slot.y*h));         // зажимаем по вертикали
-  const e=Math.min(1,age/.14),sc=.8+.2*(1-Math.pow(1-e,3));
-  g.globalAlpha=Math.min(1,age/.07+.2);g.translate(xc,yc);g.scale(sc,sc);
+  const yc=Math.min(h-pad-bh/2,Math.max(pad+bh/2,slot.y*h));
+  const nL=ch.words.reduce((a,x)=>a+x.length,0),ts=Math.max(1,animTotal(an,nL)/Math.max(.25,cdur*.7));   // быстрые кусочки — анимация ускоряется
   const pc=(p-ch.t0)/Math.max(1e-6,ch.t1-ch.t0),tot=ch.words.reduce((a,x)=>a+x.length+1,0);
   let acc=0,act=ch.words.length-1;for(let i=0;i<ch.words.length;i++){acc+=ch.words[i].length+1;if(pc*tot<acc){act=i;break}}
-  let k=0;const spw=g.measureText(' ').width;
-  lines.forEach((ln,li)=>{
-    const lw=g.measureText(ln.join(' ')).width,y=-bh/2+lh*(li+.5);
-    let x=slot.a==='l'?-bw/2:slot.a==='r'?bw/2-lw:-lw/2;
-    ln.forEach(wd=>{const hi=CFG.karaoke==='1'&&k===act;
-      g.fillStyle=hi?PRI:CFG.acc2;g.fillText(wd,x,y);x+=g.measureText(wd).width+spw;k++})});
+  g.translate(xc,yc);const t=age*ts;
+  if(an.glass)glassPanel(g,bw,bh,size,t);
+  renderText(g,lines,slot.a,bw,bh,lh,size,an,t,wi=>CFG.karaoke==='1'&&wi===act?PRI:CFG.acc2);
   g.restore()}
+
+/* Превью анимации в библиотеке: слово зацикленно появляется на тёмной карточке */
+function drawAnimCard(c,T){
+  const g=c.g,an=ANIMS[c.i],W=288,H=180,size=44;
+  g.setTransform(2,0,0,2,0,0);g.globalAlpha=1;g.shadowBlur=0;g.fillStyle='#0a0c14';g.fillRect(0,0,W,H);
+  const gr=g.createRadialGradient(W/2,H/2,0,W/2,H/2,W*.6);gr.addColorStop(0,A(.14));gr.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=gr;g.fillRect(0,0,W,H);
+  const word=c.word.toUpperCase(),tot=animTotal(an,word.length),t=((T-c.t0)%(tot+1.5)+(tot+1.5))%(tot+1.5);
+  g.save();g.font=`800 ${size}px "${CFG.font}",sans-serif`;g.textBaseline='middle';g.textAlign='left';g.translate(W/2,H/2);
+  const bw=g.measureText(word).width,bh=size*1.2;
+  if(an.glass)glassPanel(g,bw,bh,size,t);
+  renderText(g,[[word]],'c',bw,bh,bh,size,an,t,()=>CFG.acc2);g.restore()}
 
 const vc=$('vc'),vg=vc.getContext('2d',{alpha:false});
 function curSeg(){let si=-1;S.segs.forEach((s,i)=>{if(pos>=s.start&&pos<s.start+s.dur+S.gap+.001)si=i});return si<0?(S.segs.length&&pos>=total?S.segs.length-1:0):si}
@@ -354,13 +452,13 @@ function drawVideo(T){
   vg.setTransform(1,0,0,1,0,0);vg.globalAlpha=1;vg.shadowBlur=0;vidInst.draw(vg,T,VWd,VHt);vg.shadowBlur=0;vg.globalAlpha=1;
   if(sg&&sg.chunks&&sg.chunks.length&&pos>=sg.start-.001){
     const p=Math.min(.9999,Math.max(0,(pos-sg.start)/sg.dur)),ci=Math.max(0,sg.chunks.findIndex(c=>p<c.t1)),ch=sg.chunks[ci];
-    drawChunk(vg,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p)}
+    drawChunk(vg,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p,(ch.t1-ch.t0)*sg.dur)}
   $('tm').textContent=fmt(pos)+' / '+fmt(total)}
 
 /* Выбор фона */
 function selectBg(i){S.bg=i;curBg=-1;
   document.querySelectorAll('.chip').forEach((c,k)=>c.classList.toggle('on',k===i));
-  document.querySelectorAll('.card').forEach((c,k)=>c.classList.toggle('sel',k===i))}
+  document.querySelectorAll('#grid .card').forEach((c,k)=>c.classList.toggle('sel',k===i))}
 BACKGROUNDS.forEach((b,i)=>{const c=document.createElement('div');c.className='chip';c.textContent=b.name;c.onclick=()=>selectBg(i);$('chips').appendChild(c)});
 
 /* Gemini через Worker */
@@ -375,7 +473,7 @@ $('gen').onclick=async()=>{
   showErr('');pause();const b=$('gen');b.disabled=true;b.textContent='Пишу сценарий…';
   try{
     const d=await api('/script',{prompt,tone:CFG.tone,seconds:+CFG.secs,bgs:BACKGROUNDS.map(x=>x.name)});
-    S.segs=d.segments.map(s=>({text:String(s.text).trim(),rate:1,buf:null}));S.hasTTS=false;S.title=d.title||'';
+    S.segs=d.segments.map(s=>({text:String(s.text).trim(),rate:1,buf:null}));S.hasTTS=false;S.title=d.title||'';animSeq.length=0;
     $('vtitle').textContent=S.title;$('result').hidden=false;
     const bi=BACKGROUNDS.findIndex(x=>x.name===d.background);selectBg(bi>=0?bi:S.bg);
     pos=0;renderSegs();$('result').scrollIntoView({behavior:'smooth'})
@@ -471,8 +569,22 @@ BACKGROUNDS.forEach((b,i)=>{
   const g=cv.getContext('2d',{alpha:false});g.fillStyle=BG;g.fillRect(0,0,240,320);
   const c={g,inst:b.create(VW,VH),visible:false};el._c=c;cards.push(c);
   el.onclick=()=>selectBg(i)});
-const io=new IntersectionObserver(es=>es.forEach(e=>e.target._c.visible=e.isIntersecting),{rootMargin:'100px'});
+const io=new IntersectionObserver(es=>es.forEach(e=>{e.target._c.visible=e.isIntersecting;if(e.isIntersecting)e.target._c.t0=T}),{rootMargin:'100px'});
 grid.querySelectorAll('.card').forEach(el=>io.observe(el));
+
+/* Библиотека анимаций текста */
+const ANIM_WORDS=['Дыши','Свет','Пульс','Стекло','Ритм','Взлёт','Влево','Вправо','Флип','Ось','Неон','Фокус','Глитч','Центр','Контур','Прыжок','Вихрь','Глубина','Спираль','Вверх'];
+const agrid=$('agrid'),acards=[];
+function syncAnim(){agrid.querySelectorAll('.card').forEach((el,k)=>el.classList.toggle('sel',CFG.anim===String(k)))}
+ANIMS.forEach((an,i)=>{
+  const el=document.createElement('div');el.className='card acard';
+  const cv=document.createElement('canvas');cv.width=576;cv.height=360;
+  const lb=document.createElement('span');lb.textContent=String(i+1).padStart(2,'0')+' · '+an.n;el.append(cv,lb);agrid.appendChild(el);
+  const c={g:cv.getContext('2d',{alpha:false}),i,word:ANIM_WORDS[i],visible:false,t0:0};el._c=c;acards.push(c);io.observe(el);
+  el.onclick=()=>{CFG.anim=CFG.anim===String(i)?'rand':String(i);save();$('anim').value=CFG.anim;syncAnim()}});
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));
+  const an=b.dataset.t==='an';$('grid').hidden=an;$('agrid').hidden=!an;$('anote').hidden=!an});
 
 /* Палитра из фото */
 function palette(img){
@@ -498,6 +610,8 @@ const fontLoad=()=>{document.fonts.load(`800 40px "${CFG.font}"`,'Аа');const s
   s.fontSize=Math.round(CFG.size*.55)+'px';$('szv').textContent=CFG.size+' px'};
 bind('font','font',fontLoad);bind('size','size',fontLoad);bind('layout','layout');bind('upper','upper',compute);bind('chunk','chunk',compute);bind('bgmode','bgmode');bind('karaoke','karaoke');
 bind('tone','tone');bind('secs','secs');bind('voice','voice');
+$('anim').innerHTML='<option value="rand">Случайная, без повторов</option>'+ANIMS.map((a,i)=>`<option value="${i}">${String(i+1).padStart(2,'0')} · ${a.n}</option>`).join('');
+bind('anim','anim',syncAnim);syncAnim();
 $('acc').oninput=e=>setAcc(e.target.value);
 $('acc2').value=CFG.acc2;$('acc2').oninput=e=>{CFG.acc2=e.target.value;save();fontLoad()};
 $('sp').oninput=e=>{S.speed=+e.target.value;$('spv').textContent=S.speed.toFixed(2)+'×';compute()};
@@ -510,8 +624,10 @@ let last=performance.now(),T=0;
   const dt=Math.min(.05,(now-last)/1000);last=now;T+=dt;
   if(playing&&AC){pos=AC.currentTime-t0;if(pos>=total&&!exporting){pos=total;pause()}if(!exporting)$('seek').value=pos}
   if(($('create').classList.contains('active')&&!$('result').hidden)||exporting)drawVideo(T);
-  if($('library').classList.contains('active'))for(const c of cards){if(!c.visible)continue;const g=c.g;
-    g.setTransform(240/VW,0,0,320/VH,0,0);g.globalAlpha=1;g.shadowBlur=0;c.inst.draw(g,T,VW,VH);g.shadowBlur=0}
+  if($('library').classList.contains('active')){
+    if($('agrid').hidden){for(const c of cards){if(!c.visible)continue;const g=c.g;
+      g.setTransform(240/VW,0,0,320/VH,0,0);g.globalAlpha=1;g.shadowBlur=0;c.inst.draw(g,T,VW,VH);g.shadowBlur=0}}
+    else for(const c of acards)if(c.visible)drawAnimCard(c,T)}
   requestAnimationFrame(loop)})(performance.now());
 </script>
 </body>
