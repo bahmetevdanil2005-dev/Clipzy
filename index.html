@@ -134,7 +134,6 @@ input[type=range]{accent-color:var(--pri);width:100%}
   <label class="field" style="margin-top:14px"><span>Размер: <b id="szv"></b></span><input type="range" id="size" min="34" max="96" step="1"></label>
   <div class="two">
     <label class="field">Положение<select id="layout"><option value="auto">По всему кадру (авто)</option><option value="top">Всегда сверху</option><option value="center">Всегда по центру</option><option value="bottom">Всегда снизу</option></select></label>
-    <label class="field">Оформление<select id="look"><option value="outline">Обводка</option><option value="plain">Без обводки</option></select></label>
   </div>
   <div class="two">
     <label class="field">Регистр<select id="upper"><option value="1">ЗАГЛАВНЫЕ</option><option value="0">Как написано</option></select></label>
@@ -338,7 +337,6 @@ function drawChunk(g,w,h,ch,gi,age,p){
     const lw=g.measureText(ln.join(' ')).width,y=-bh/2+lh*(li+.5);
     let x=slot.a==='l'?-bw/2:slot.a==='r'?bw/2-lw:-lw/2;
     ln.forEach(wd=>{const hi=CFG.karaoke==='1'&&k===act;
-      if(CFG.look==='outline'){g.lineWidth=size*.16;g.strokeStyle='#000';g.strokeText(wd,x,y)}
       g.fillStyle=hi?PRI:CFG.acc2;g.fillText(wd,x,y);x+=g.measureText(wd).width+spw;k++})});
   g.restore()}
 
@@ -383,8 +381,14 @@ $('gen').onclick=async()=>{
 function pcmToBuf(b64){
   const bin=atob(b64),n=bin.length>>1,f=new Float32Array(n);
   for(let i=0;i<n;i++){let v=bin.charCodeAt(2*i)|(bin.charCodeAt(2*i+1)<<8);if(v>=32768)v-=65536;f[i]=v/32768}
-  let a=0,e=n;while(a<n&&Math.abs(f[a])<.012)a++;while(e>a&&Math.abs(f[e-1])<.012)e--;
-  a=Math.max(0,a-1200);e=Math.min(n,e+1800);const o=f.slice(a,e),buf=getAC().createBuffer(1,o.length,24000);buf.copyToChannel(o,0);return buf}
+  // Обрезаем тишину и «хвост» с шумом по громкости окнами по 10 мс, затем плавно гасим края (убирает шипение и щелчки)
+  const W=240,th=.014,rms=i=>{let q=0;for(let k=i;k<Math.min(n,i+W);k++)q+=f[k]*f[k];return Math.sqrt(q/W)};
+  let a=0,e=n;while(a<n-W&&rms(a)<th)a+=W/2;while(e>a+W&&rms(e-W)<th)e-=W/2;
+  a=Math.max(0,a-240);e=Math.min(n,e+480);
+  const o=f.slice(a,e),L=o.length,fo=Math.min(1700,L>>1),fi=Math.min(200,L>>2);
+  for(let i=0;i<fi;i++)o[i]*=.5-.5*Math.cos(Math.PI*i/fi);
+  for(let i=0;i<fo;i++)o[L-1-i]*=.5-.5*Math.cos(Math.PI*i/fo);
+  const buf=getAC().createBuffer(1,L,24000);buf.copyToChannel(o,0);return buf}
 
 $('tts').onclick=async()=>{
   showErr('');pause();getAC();const b=$('tts'),bar=$('ttsBar');
@@ -453,7 +457,7 @@ VOICES.forEach(v=>{const o=document.createElement('option');o.textContent=v;$('v
 const bind=(id,key,fn)=>{const el=$(id);el.value=CFG[key];el.addEventListener('input',()=>{CFG[key]=key==='size'?+el.value:el.value;save();fn&&fn()})};
 const fontLoad=()=>{document.fonts.load(`800 40px "${CFG.font}"`,'Аа');const s=$('sample').style;s.fontFamily=`"${CFG.font}",sans-serif`;s.fontWeight=800;s.color=CFG.acc2;
   s.fontSize=Math.round(CFG.size*.55)+'px';$('szv').textContent=CFG.size+' px'};
-bind('font','font',fontLoad);bind('size','size',fontLoad);bind('layout','layout');bind('look','look');bind('upper','upper',compute);bind('chunk','chunk',compute);bind('bgmode','bgmode');bind('karaoke','karaoke');
+bind('font','font',fontLoad);bind('size','size',fontLoad);bind('layout','layout');bind('upper','upper',compute);bind('chunk','chunk',compute);bind('bgmode','bgmode');bind('karaoke','karaoke');
 bind('tone','tone');bind('secs','secs');bind('voice','voice');
 $('acc').oninput=e=>setAcc(e.target.value);
 $('acc2').value=CFG.acc2;$('acc2').oninput=e=>{CFG.acc2=e.target.value;save();fontLoad()};
