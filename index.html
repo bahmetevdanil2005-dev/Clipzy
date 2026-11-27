@@ -97,9 +97,9 @@ input[type=range]{accent-color:var(--pri);width:100%}
       <label class="field"><span>Скорость озвучки: <b id="spv">1.00×</b></span><input type="range" id="sp" min="0.8" max="1.3" step="0.01" value="1"></label>
     </div>
     <label class="field"><span>Пауза между репликами: <b id="gpv">0.15 с</b></span><input type="range" id="gp" min="0" max="0.8" step="0.05" value="0.15"></label>
-    <button class="btn full" id="tts">Озвучить</button>
+    <button class="btn full" id="tts">Озвучить весь сценарий</button>
     <div class="bar" id="ttsBar"><i></i></div>
-    <p class="note">Длительность каждой реплики берётся из реального аудио, поэтому субтитры сменяются ровно по голосу. Если поправил текст, реплика подсветится оранжевым, её нужно озвучить заново. Кнопки −/+ у реплики подгоняют её темп.</p>
+    <p class="note" id="ttsNote">Весь сценарий озвучивается одним запросом (так расходуется минимум квоты), затем нарезается на реплики по паузам. Длительность реплик берётся из реального аудио, поэтому субтитры идут ровно по голосу. Если поправил текст, реплика подсветится оранжевым, и сценарий нужно озвучить заново. Кнопки −/+ меняют темп реплики, ‹ › двигают границу между фразами.</p>
 
     <h4>Скачать</h4>
     <label class="field">Формат<select id="fmt"><option value="mp4">MP4</option><option value="webm">WebM</option></select></label>
@@ -275,7 +275,8 @@ function renderSegs(){
   $('segs').innerHTML=S.segs.map((sg,i)=>`<div class="seg" data-i="${i}"><div class="n">${i+1}</div>
     <textarea>${sg.text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
     <div class="side"><div class="row"><button data-a="rm" title="Темп −">−</button><span class="rv"></span><button data-a="rp" title="Темп +">+</button></div>
-    <div class="row"><button data-a="go" title="Перейти">▶</button><span class="d"></span><button data-a="del" title="Удалить">✕</button></div></div></div>`).join('');
+    <div class="row"><button data-a="go" title="Перейти">▶</button><span class="d"></span><button data-a="del" title="Удалить">✕</button></div>
+    <div class="row"><button data-a="bl" title="Граница с следующей репликой раньше">‹</button><span>граница</span><button data-a="br" title="Граница с следующей репликой позже">›</button></div></div></div>`).join('');
   compute()}
 $('segs').addEventListener('input',e=>{
   if(e.target.tagName!=='TEXTAREA')return;const i=+e.target.closest('.seg').dataset.i;
@@ -285,6 +286,8 @@ $('segs').addEventListener('click',e=>{
   if(b.dataset.a==='rm')sg.rate=Math.max(.6,+(sg.rate-.05).toFixed(2));
   if(b.dataset.a==='rp')sg.rate=Math.min(1.6,+(sg.rate+.05).toFixed(2));
   if(b.dataset.a==='go'){seekTo(sg.start);return}
+  if(b.dataset.a==='bl'){shiftBoundary(i,-1200);return}
+  if(b.dataset.a==='br'){shiftBoundary(i,1200);return}
   if(b.dataset.a==='del'){S.segs.splice(i,1);renderSegs();return}
   compute()});
 $('addSeg').onclick=()=>{S.segs.push({text:'Новая реплика',rate:1,buf:null});renderSegs()};
@@ -292,8 +295,9 @@ $('addSeg').onclick=()=>{S.segs.push({text:'Новая реплика',rate:1,bu
 /* Воспроизведение */
 function startAudio(dest,from){
   const base=AC.currentTime+.05;
+  const lp=AC.createBiquadFilter();lp.type='lowpass';lp.frequency.value=9500;lp.Q.value=.7;lp.connect(dest);
   S.segs.forEach(sg=>{if(!sg.buf||sg.start+sg.dur<=from)return;
-    const src=AC.createBufferSource();src.buffer=sg.buf;const r=sg.rate*S.speed;src.playbackRate.value=r;src.connect(dest);
+    const src=AC.createBufferSource();src.buffer=sg.buf;const r=sg.rate*S.speed;src.playbackRate.value=r;src.connect(lp);
     src.start(base+Math.max(0,sg.start-from),Math.max(0,from-sg.start)*r);srcs.push(src)});
   return base}
 function stopAudio(){srcs.forEach(s=>{try{s.stop()}catch(e){}});srcs=[]}
@@ -378,29 +382,64 @@ $('gen').onclick=async()=>{
   }catch(e){showErr('Не удалось создать сценарий: '+e.message)}
   b.disabled=false;b.textContent='Создать сценарий'};
 
-function pcmToBuf(b64){
+/* Озвучка: ВЕСЬ сценарий одним запросом, затем нарезка на реплики по паузам */
+function decodePCM(b64){
   const bin=atob(b64),n=bin.length>>1,f=new Float32Array(n);
   for(let i=0;i<n;i++){let v=bin.charCodeAt(2*i)|(bin.charCodeAt(2*i+1)<<8);if(v>=32768)v-=65536;f[i]=v/32768}
-  // Обрезаем тишину и «хвост» с шумом по громкости окнами по 10 мс, затем плавно гасим края (убирает шипение и щелчки)
-  const W=240,th=.014,rms=i=>{let q=0;for(let k=i;k<Math.min(n,i+W);k++)q+=f[k]*f[k];return Math.sqrt(q/W)};
-  let a=0,e=n;while(a<n-W&&rms(a)<th)a+=W/2;while(e>a+W&&rms(e-W)<th)e-=W/2;
-  a=Math.max(0,a-240);e=Math.min(n,e+480);
-  const o=f.slice(a,e),L=o.length,fo=Math.min(1700,L>>1),fi=Math.min(200,L>>2);
+  return f}
+function splitSpeech(f,segs){
+  const W=240,n=Math.floor(f.length/W),E=new Float32Array(n);
+  for(let j=0;j<n;j++){let q=0;for(let k=j*W;k<(j+1)*W;k++)q+=f[k]*f[k];E[j]=Math.sqrt(q/W)}
+  const sorted=Array.from(E).sort((x,y)=>x-y),th=Math.max(.01,(sorted[Math.floor(n*.9)]||.1)*.06);
+  let first=0;while(first<n&&E[first]<th)first++;let last=n-1;while(last>first&&E[last]<th)last--;
+  const span=Math.max(1,last-first),N=segs.length;
+  const C=[];for(let j=first;j<=last;){if(E[j]<th){let k=j;while(k<=last&&E[k]<th)k++;if(k-j>=3)C.push({c:(j+k)/2,L:k-j});j=k}else j++}
+  const wts=segs.map(x=>x.text.length+8),tot=wts.reduce((x,y)=>x+y,0),exp=[];let cum=0;
+  for(let i=0;i<N-1;i++){cum+=wts[i];exp.push(first+cum/tot*span)}
+  let cuts=null,approx=false;
+  if(N===1)cuts=[];
+  else if(C.length>=N-1){   // выбираем N-1 пауз по порядку: длиннее и ближе к ожидаемой позиции — лучше
+    const M=C.length,sc=(k,i)=>Math.min(C[i].L,50)/50-3*Math.abs(C[i].c-exp[k])/span;
+    const dp=Array.from({length:N-1},()=>new Float64Array(M).fill(-1e9)),bk=Array.from({length:N-1},()=>new Int16Array(M).fill(-1));
+    for(let i=0;i<M;i++)dp[0][i]=sc(0,i);
+    for(let k=1;k<N-1;k++){let best=-1e9,bi=-1;
+      for(let i=0;i<M;i++){if(i>0&&dp[k-1][i-1]>best){best=dp[k-1][i-1];bi=i-1}if(bi>=0){dp[k][i]=best+sc(k,i);bk[k][i]=bi}}}
+    let bi=-1,bv=-1e8;for(let i=0;i<M;i++)if(dp[N-2][i]>bv){bv=dp[N-2][i];bi=i}
+    if(bi>=0){cuts=[];for(let k=N-2;k>=0;k--){cuts[k]=C[bi].c;bi=bk[k][bi]}}
+  }
+  if(!cuts){approx=true;cuts=exp.map(p=>{let bj=Math.round(p),bv=1e9;const r=Math.max(2,Math.round(span*.03));
+    for(let j=Math.max(first,Math.round(p)-r);j<=Math.min(last,Math.round(p)+r);j++)if(E[j]<bv){bv=E[j];bj=j}return bj})}
+  segs.forEach((sg,i)=>{
+    let a=i===0?first:Math.round(cuts[i-1]),b=i===N-1?last+1:Math.round(cuts[i]);
+    while(a<b-1&&E[a]<th)a++;while(b>a+1&&E[b-1]<th)b--;       // обрезаем тишину и шум по краям
+    sg.a=Math.max(0,a*W-480);sg.b=Math.min(f.length,b*W+720)});
+  return {approx}}
+function makeSlice(sg){
+  const o=S.pcm.slice(sg.a,sg.b),L=o.length,fi=Math.min(120,L>>2),fo=Math.min(960,L>>1);   // плавное начало и конец без щелчков и шипения
   for(let i=0;i<fi;i++)o[i]*=.5-.5*Math.cos(Math.PI*i/fi);
   for(let i=0;i<fo;i++)o[L-1-i]*=.5-.5*Math.cos(Math.PI*i/fo);
-  const buf=getAC().createBuffer(1,L,24000);buf.copyToChannel(o,0);return buf}
+  const buf=getAC().createBuffer(1,L,24000);buf.copyToChannel(o,0);sg.buf=buf}
+function shiftBoundary(i,d){   // сдвиг границы между репликой i и следующей
+  const sg=S.segs[i],nx=S.segs[i+1];if(!S.pcm||!sg||!sg.buf)return;
+  if(nx&&nx.buf){if(nx.a+d>=nx.b-2400||sg.b+d<=sg.a+2400)return;nx.a+=d;sg.b+=d;makeSlice(nx)}
+  else{if(sg.b+d<=sg.a+2400||sg.b+d>S.pcm.length)return;sg.b+=d}
+  makeSlice(sg);compute()}
 
 $('tts').onclick=async()=>{
   showErr('');pause();getAC();const b=$('tts'),bar=$('ttsBar');
-  const todo=S.segs.filter(s=>!s.buf&&s.text.trim());
-  if(!todo.length){showErr('Все реплики уже озвучены. Измени текст реплики, чтобы озвучить её заново.');return}
-  b.disabled=true;bar.style.display='block';S.hasTTS=true;let n=0;
-  try{for(const sg of todo){
-    b.textContent=`Озвучиваю ${++n} из ${todo.length}…`;
-    let d;try{d=await api('/tts',{text:sg.text,voice:CFG.voice})}catch(e){d=await api('/tts',{text:sg.text,voice:CFG.voice})}
-    sg.buf=pcmToBuf(d.pcm);compute();bar.firstChild.style.width=(n/todo.length*100)+'%'}
+  if(S.segs.some(s=>!s.text.trim())){S.segs=S.segs.filter(s=>s.text.trim());renderSegs()}
+  const segs=S.segs;if(!segs.length){showErr('Нет текста для озвучки.');return}
+  b.disabled=true;b.textContent='Озвучиваю весь сценарий…';bar.style.display='block';bar.firstChild.style.width='70%';
+  try{
+    const text=segs.map(x=>{const t=x.text.trim();return /[.!?…]$/.test(t)?t:t+'.'}).join('\n\n');
+    const d=await api('/tts',{text,voice:CFG.voice});          // один запрос на весь сценарий
+    S.pcm=decodePCM(d.pcm);S.hasTTS=true;
+    const r=splitSpeech(S.pcm,segs);segs.forEach(makeSlice);compute();
+    $('ttsNote').textContent=r.approx
+      ?'Озвучено одним запросом. Паузы между фразами в записи неочевидны, поэтому границы поставлены приблизительно. Проверь на слух и подвинь кнопками ‹ › у реплики, если слова ушли в соседнюю.'
+      :'Весь сценарий озвучен одним запросом, границы фраз найдены по паузам. Если какое-то слово ушло в соседнюю реплику, подвинь границу кнопками ‹ › у реплики.';
   }catch(e){showErr('Ошибка озвучки: '+e.message)}
-  b.disabled=false;b.textContent='Озвучить';setTimeout(()=>{bar.style.display='none';bar.firstChild.style.width='0'},800);compute()};
+  b.disabled=false;b.textContent='Озвучить весь сценарий';setTimeout(()=>{bar.style.display='none';bar.firstChild.style.width='0'},600);compute()};
 
 /* Экспорт: запись холста и звука в реальном времени */
 $('exp').onclick=()=>{
