@@ -148,10 +148,11 @@ input[type=text]:focus{border-color:var(--pri)}
     <p class="note" id="ttsNote">Весь сценарий озвучивается одним запросом (так расходуется минимум квоты), затем нарезается на реплики по паузам. Длительность реплик берётся из реального аудио, поэтому субтитры идут ровно по голосу. Если поправил текст, реплика подсветится оранжевым, и сценарий нужно озвучить заново. Кнопки −/+ меняют темп реплики, ‹ › двигают границу между фразами.</p>
 
     <h4>Скачать</h4>
-    <label class="field">Формат<select id="fmt"><option value="mp4">MP4</option><option value="webm">WebM</option></select></label>
+    <div class="two"><label class="field">Формат<select id="fmt"><option value="mp4">MP4</option><option value="webm">WebM</option></select></label>
+    <label class="field">Качество<select id="qual"><option value="540">540p (быстрее)</option><option value="720" selected>720p</option><option value="1080">1080p (дольше)</option></select></label></div>
     <button class="btn full" id="exp">Скачать видео</button>
     <div class="bar" id="expBar"><i></i></div>
-    <p class="note" id="expNote">Видео записывается в реальном времени, не сворачивай вкладку, пока идёт запись.</p>
+    <p class="note" id="expNote">Видео собирается покадрово (ровно 30 к/с), поэтому не тормозит, а звук совпадает с картинкой. Это занимает 1–3 минуты.</p>
   </div>
 </div></section>
 
@@ -328,7 +329,7 @@ const BACKGROUNDS=[
 /* Состояние видео */
 const VWd=540,VHt=960;
 const S={segs:[],bg:0,speed:1,gap:.15,title:'',hasTTS:false,logos:{},media:[],place:[]};
-let vidInst=null,curBg=-1,total=0,pos=0,playing=false,t0=0,srcs=[],AC=null,exporting=false;
+let vidInst=null,curBg=-1,total=0,pos=0,playing=false,t0=0,srcs=[],AC=null,exporting=false,offline=false;
 const getAC=()=>{AC=AC||new(window.AudioContext||window.webkitAudioContext)();if(AC.state==='suspended')AC.resume();return AC};
 const fmt=s=>{s=Math.max(0,s);return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')};
 const wc=t=>t.trim().split(/\s+/).filter(Boolean).length;
@@ -594,7 +595,7 @@ function enterP(style,age,w,h){
   else if(style==='flip')P.sx=Math.max(.001,Math.abs(Math.cos((1-eu)*Math.PI/2)));
   else P.s=1.12-.12*eu;
   return P}
-function syncVideo(el,t){const d=el.duration||1,want=t%d;if(Math.abs(el.currentTime-want)>.35){try{el.currentTime=want}catch(e){}}
+function syncVideo(el,t){if(offline)return;const d=el.duration||1,want=t%d;if(Math.abs(el.currentTime-want)>.35){try{el.currentTime=want}catch(e){}}
   if(playing){if(el.paused)el.play().catch(()=>{})}else if(!el.paused)el.pause()}
 function logoInfo(im){   // определяем, есть ли у логотипа собственный фон и насколько он тёмный
   if(im._li)return im._li;let li={opaque:false,lum:.5};
@@ -652,18 +653,20 @@ const vc=$('vc'),vg=vc.getContext('2d',{alpha:false});
 function curSeg(){let si=-1;S.segs.forEach((s,i)=>{if(pos>=s.start&&pos<s.start+s.dur+S.gap+.001)si=i});return si<0?(S.segs.length&&pos>=total?S.segs.length-1:0):si}
 // Фон меняется только на границе реплик: номер фона зависит от номера реплики
 function planBg(si){const k=+CFG.bgmode;return k?(S.bg+Math.floor(si/k))%BACKGROUNDS.length:S.bg}
-function drawVideo(T){
+function drawVideo(T,g=vg,K=1,steps=1){   // g — холст, K — масштаб (для экспорта в 720p/1080p), steps — сколько раз «шагнуть» фон за кадр
   const si=curSeg(),sg=S.segs[si],b=planBg(Math.max(0,si));
   if(!vidInst||b!==curBg){curBg=b;vidInst=BACKGROUNDS[b].create(VWd,VHt)}
-  vg.setTransform(1,0,0,1,0,0);vg.globalAlpha=1;vg.shadowBlur=0;vidInst.draw(vg,T,VWd,VHt);vg.shadowBlur=0;vg.globalAlpha=1;
+  g.setTransform(K,0,0,K,0,0);g.globalAlpha=1;g.shadowBlur=0;
+  for(let k=0;k<steps;k++)vidInst.draw(g,T+k/60,VWd,VHt);
+  g.shadowBlur=0;g.globalAlpha=1;
   const v=sg&&sg.vis,full=v&&v.mode==='full'&&v.kind==='media';
-  if(!full&&+CFG.dim>0){vg.fillStyle='rgba(0,0,0,'+(CFG.dim/100)+')';vg.fillRect(0,0,VWd,VHt)}   // затемнение фона для читаемости текста
+  if(!full&&+CFG.dim>0){g.fillStyle='rgba(0,0,0,'+(CFG.dim/100)+')';g.fillRect(0,0,VWd,VHt)}   // затемнение фона для читаемости текста
   S.media.forEach(m=>{if(m.type==='video'&&(!v||v.m!==m)&&!m.el.paused)m.el.pause()});
-  if(v)drawVisual(vg,VWd,VHt,v,pos);
+  if(v)drawVisual(g,VWd,VHt,v,pos);
   if(sg&&sg.chunks&&sg.chunks.length&&pos>=sg.start-.001){
     const p=Math.min(.9999,Math.max(0,(pos-sg.start)/sg.dur)),ci=Math.max(0,sg.chunks.findIndex(c=>p<c.t1)),ch=sg.chunks[ci];
-    drawChunk(vg,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p,(ch.t1-ch.t0)*sg.dur,v&&v.zone)}
-  $('tm').textContent=fmt(pos)+' / '+fmt(total)}
+    drawChunk(g,VWd,VHt,ch,sg.g0+ci,Math.max(0,(p-ch.t0)*sg.dur),p,(ch.t1-ch.t0)*sg.dur,v&&v.zone)}
+  if(g===vg)$('tm').textContent=fmt(pos)+' / '+fmt(total)}
 
 /* Выбор фона */
 function selectBg(i){S.bg=i;curBg=-1;
@@ -756,8 +759,8 @@ $('tts').onclick=async()=>{
   }catch(e){showErr('Ошибка озвучки: '+e.message)}
   b.disabled=false;b.textContent='Озвучить весь сценарий';setTimeout(()=>{bar.style.display='none';bar.firstChild.style.width='0'},600);compute()};
 
-/* Экспорт: запись холста и звука в реальном времени */
-$('exp').onclick=()=>{
+/* Запасной экспорт: запись холста и звука в реальном времени (может подтормаживать) */
+function exportRealtime(){
   showErr('');if(!total){showErr('Сначала создай сценарий.');return}
   if(!S.segs.some(s=>s.buf)&&!confirm('Озвучки нет, видео будет без звука. Продолжить?'))return;
   if(!window.MediaRecorder){showErr('Этот браузер не умеет записывать видео. Открой Clipzy в Chrome или Safari.');return}
@@ -775,7 +778,69 @@ $('exp').onclick=()=>{
     a.href=url;a.download=(S.title||'clipzy').replace(/[^\p{L}\p{N}]+/gu,'_').slice(0,40)+'.'+ext;document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),10000);exporting=false;pause();pos=0;$('exp').disabled=false;$('exp').textContent='Скачать видео';$('expBar').style.display='none'};
   const b=startAudio(dest,0);t0=b;playing=true;rec.start(250);
-  const end=()=>{if(pos>=total+.4){rec.stop();return}$('expBar').firstChild.style.width=Math.min(100,pos/total*100)+'%';requestAnimationFrame(end)};end()};
+  const end=()=>{if(pos>=total+.4){rec.stop();return}$('expBar').firstChild.style.width=Math.min(100,pos/total*100)+'%';requestAnimationFrame(end)};end()}
+/* Основной экспорт: кадры рисуются по одному (ровно 30 к/с) и кодируются в MP4 или WebM, звук сводится отдельно.
+   Скорость устройства не влияет на плавность и синхронизацию, в отличие от записи в реальном времени. */
+let MB=null;
+async function loadMB(){
+  if(MB)return MB;
+  for(const u of ['https://cdn.jsdelivr.net/npm/mediabunny@1.66.5/dist/bundles/mediabunny.min.mjs','https://unpkg.com/mediabunny@1.66.5/dist/bundles/mediabunny.min.mjs']){
+    try{MB=await import(u);return MB}catch(e){}}
+  return null}
+async function renderAudio(){
+  const sr=48000,oc=new OfflineAudioContext(2,Math.ceil((total+.6)*sr),sr);
+  const lp=oc.createBiquadFilter();lp.type='lowpass';lp.frequency.value=9500;lp.Q.value=.7;lp.connect(oc.destination);
+  S.segs.forEach(sg=>{if(!sg.buf)return;const src=oc.createBufferSource();src.buffer=sg.buf;src.playbackRate.value=sg.rate*S.speed;src.connect(lp);src.start(sg.start)});
+  return oc.startRendering()}
+const seekVideo=(el,t)=>new Promise(res=>{if(Math.abs(el.currentTime-t)<.012)return res();
+  const done=()=>{el.removeEventListener('seeked',done);res()};el.addEventListener('seeked',done);el.currentTime=t;setTimeout(done,900)});
+$('exp').onclick=async()=>{
+  showErr('');if(!total){showErr('Сначала создай сценарий.');return}
+  const hasAudio=S.segs.some(s=>s.buf);
+  if(!hasAudio&&!confirm('Озвучки нет, видео будет без звука. Продолжить?'))return;
+  const btn=$('exp'),bar=$('expBar').firstChild,note=$('expNote');
+  btn.disabled=true;btn.textContent='Подготовка…';
+  const mb=await loadMB();
+  if(!mb||!window.VideoEncoder||!window.AudioEncoder||!window.OfflineAudioContext){
+    btn.disabled=false;btn.textContent='Скачать видео';
+    note.textContent='Точный покадровый рендер недоступен (нужен свежий Chrome, Edge или Safari и доступ к cdn.jsdelivr.net). Запись идёт в реальном времени, поэтому видео может подтормаживать.';
+    return exportRealtime()}
+  const K={540:1,720:4/3,1080:2}[$('qual').value]||4/3,W=Math.round(VWd*K),H=Math.round(VHt*K),FPS=30,vbr=K>=2?12e6:K>1?8e6:5e6,abr=160000;
+  const fo=$('fmt').value==='webm'?new mb.WebMOutputFormat():new mb.Mp4OutputFormat();
+  const vcodec=await mb.getFirstEncodableVideoCodec(fo.getSupportedVideoCodecs(),{width:W,height:H,bitrate:vbr});
+  const acodec=hasAudio?await mb.getFirstEncodableAudioCodec(fo.getSupportedAudioCodecs(),{numberOfChannels:2,sampleRate:48000,bitrate:abr}):null;
+  if(!vcodec||(hasAudio&&!acodec)){btn.disabled=false;btn.textContent='Скачать видео';
+    showErr('Браузер не умеет кодировать '+(!vcodec?'видео в этом разрешении или формате':'звук в этом формате')+'. Выбери 540p или формат WebM, либо открой Clipzy в Chrome.');return}
+  note.textContent='Видео собирается покадрово: может занять 1–3 минуты, не закрывай вкладку. Зато картинка плавная, а звук точно совпадает с кадрами.';
+  pause();getAC();offline=true;exporting=true;$('expBar').style.display='block';bar.style.width='0';
+  try{
+    await document.fonts.load(`800 40px "${CFG.font}"`,'Аа');
+    S.segs.forEach(sg=>{if(sg.icon&&ICON_MAP[sg.icon])iconImg(sg.icon,HI())});
+    await Promise.all([...iconCache.values()].map(im=>im.decode().catch(()=>0)));
+    S.media.forEach(m=>{if(m.type==='video')m.el.pause()});
+    const ec=document.createElement('canvas');ec.width=W;ec.height=H;const eg=ec.getContext('2d',{alpha:false});
+    const output=new mb.Output({format:fo,target:new mb.BufferTarget()});
+    const vsrc=new mb.CanvasSource(ec,{codec:vcodec,bitrate:vbr,keyFrameInterval:2});output.addVideoTrack(vsrc,{frameRate:FPS});
+    let asrc=null;if(acodec){asrc=new mb.AudioBufferSource({codec:acodec,bitrate:abr});output.addAudioTrack(asrc)}
+    await output.start();
+    if(asrc){btn.textContent='Сведение звука…';await asrc.add(await renderAudio())}
+    const N=Math.ceil(total*FPS)+Math.round(.4*FPS);curBg=-1;vidInst=null;
+    for(let f=0;f<N;f++){
+      pos=Math.min(total,f/FPS);
+      const sg=S.segs[curSeg()],v=sg&&sg.vis;
+      if(v&&v.kind==='media'&&v.m.type==='video')await seekVideo(v.m.el,(pos-S.segs[v.si].start)%(v.m.el.duration||1));
+      drawVideo(f/FPS,eg,K,2);
+      await vsrc.add(f/FPS,1/FPS);
+      if(f%6===0){bar.style.width=(f/N*100)+'%';btn.textContent='Рендер '+Math.round(f/N*100)+'%';await new Promise(r=>setTimeout(r))}}
+    vsrc.close();if(asrc)asrc.close();
+    btn.textContent='Сохранение…';await output.finalize();
+    const url=URL.createObjectURL(new Blob([output.target.buffer],{type:fo.mimeType})),a=document.createElement('a');
+    a.href=url;a.download=(S.title||'clipzy').replace(/[^\p{L}\p{N}]+/gu,'_').slice(0,40)+fo.fileExtension;
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),15000);
+    note.textContent='Готово: '+W+'×'+H+', '+FPS+' к/с, '+(vcodec==='avc'?'H.264':vcodec.toUpperCase())+(acodec?' + '+acodec.toUpperCase():'')+'.';
+  }catch(e){showErr('Не удалось собрать видео: '+e.message)}
+  finally{offline=false;exporting=false;pos=0;curBg=-1;vidInst=null;btn.disabled=false;btn.textContent='Скачать видео';$('expBar').style.display='none'}};
+
 
 /* Библиотека */
 const VW=600,VH=800,grid=$('grid'),cards=[];
@@ -871,7 +936,7 @@ let last=performance.now(),T=0;
 (function loop(now){
   const dt=Math.min(.05,(now-last)/1000);last=now;T+=dt;
   if(playing&&AC){pos=AC.currentTime-t0;if(pos>=total&&!exporting){pos=total;pause()}if(!exporting)$('seek').value=pos}
-  if(($('create').classList.contains('active')&&!$('result').hidden)||exporting)drawVideo(T);
+  if(!offline&&(($('create').classList.contains('active')&&!$('result').hidden)||exporting))drawVideo(T);
   if($('library').classList.contains('active')){
     if(!$('grid').hidden){for(const c of cards){if(!c.visible)continue;const g=c.g;
       g.setTransform(240/VW,0,0,320/VH,0,0);g.globalAlpha=1;g.shadowBlur=0;c.inst.draw(g,T,VW,VH);g.shadowBlur=0}}
